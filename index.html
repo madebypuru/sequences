@@ -1,0 +1,902 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sequences</title>
+<style>
+  :root {
+    --paper: #fbfbfb;
+    --ink: #111111;
+    --ink-2: #4a4a4a;
+    --rule: #a0a0a0;
+    --edge: #7a7a7a;
+    --stage: #e2e2df;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .app { display: grid; grid-template-columns: minmax(0, 1fr) 320px; height: 100vh; }
+  .stage {
+    background: var(--stage);
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  #view { display: block; background: var(--paper); box-shadow: 0 0 0 1px var(--rule); }
+  body.dragging .stage { box-shadow: inset 0 0 0 2px var(--ink); }
+  .panel { border-left: 1px solid var(--rule); overflow-y: auto; padding: 16px; }
+  h1 { font-size: 13px; letter-spacing: 0.08em; margin: 0 0 12px; }
+  h2 {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    margin: 0;
+    padding: 12px 0 6px;
+    border-top: 1px solid var(--ink);
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr) 44px;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .row > label { font-weight: 700; text-transform: uppercase; }
+  .row > output { text-align: right; font-variant-numeric: tabular-nums; }
+  .row.wide { grid-template-columns: 88px minmax(0, 1fr); }
+  .row.btns { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  input[type=range] { width: 100%; margin: 0; accent-color: var(--ink); }
+  input[type=text], input[type=number], select {
+    font: inherit;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--edge);
+    border-radius: 0;
+    padding: 4px 6px;
+    width: 100%;
+    min-width: 0;
+  }
+  .seed { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+  button {
+    font: inherit;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--ink);
+    border-radius: 0;
+    padding: 5px 10px;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: var(--ink); color: var(--paper); }
+  button:disabled { color: var(--ink-2); border-color: var(--edge); cursor: default; }
+  .drop {
+    display: block;
+    border: 1px dashed var(--edge);
+    padding: 14px 10px;
+    text-align: center;
+    cursor: pointer;
+    text-transform: uppercase;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .drop:hover { border-color: var(--ink); }
+  .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  .drop span { display: block; font-weight: 400; text-transform: none; color: var(--ink-2); margin-top: 2px; }
+  .sources { list-style: none; margin: 0; padding: 0; }
+  .sources li {
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    gap: 6px;
+    padding: 3px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .sources li.on { font-weight: 700; }
+  .sources li span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sources li span:last-child { color: var(--ink-2); }
+  #status { min-height: 1.4em; color: var(--ink-2); padding-top: 6px; }
+  @media (max-width: 860px) {
+    .app { grid-template-columns: 1fr; height: auto; }
+    .stage { height: 68vh; }
+    .panel { border-left: 0; border-top: 1px solid var(--rule); overflow: visible; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="stage" id="stage"><canvas id="view"></canvas></div>
+  <aside class="panel">
+    <h1>SEQUENCES</h1>
+
+    <h2>SOURCE</h2>
+    <label class="drop">Drop images or videos
+      <span>or click to choose. Several files make a playlist.</span>
+      <input id="files" type="file" accept="image/*,video/*" multiple>
+    </label>
+    <ul class="sources" id="sources"></ul>
+    <div style="padding:8px 0 12px"><button id="clear">Use demo</button></div>
+
+    <h2>CANVAS</h2>
+    <div class="row wide">
+      <label for="aspect">Aspect</label>
+      <select id="aspect"></select>
+    </div>
+    <div class="row wide">
+      <label for="seed">Seed</label>
+      <div class="seed"><input id="seed" type="number" min="1" step="1"><button id="reroll">Reroll</button></div>
+    </div>
+
+    <h2>GRID</h2>
+    <div id="grid-sliders"></div>
+    <div class="row wide">
+      <label for="syllables">Syllables</label>
+      <input id="syllables" type="text" spellcheck="false" autocomplete="off">
+    </div>
+
+    <h2>MOTION</h2>
+    <div id="motion-sliders"></div>
+
+    <h2>PLAYBACK</h2>
+    <div class="row">
+      <button id="play">Pause</button>
+      <input id="scrub" type="range" min="0" step="1" aria-label="Frame">
+      <output id="frame-out"></output>
+    </div>
+
+    <h2>EXPORT</h2>
+    <div class="row btns">
+      <button id="png">PNG</button>
+      <button id="video">Video</button>
+      <button id="frames">Frames</button>
+    </div>
+    <div id="status"></div>
+  </aside>
+</div>
+
+<script>
+'use strict';
+
+const ASPECTS = {
+  '4:5  1080×1350': [1080, 1350],
+  '1:1  1080×1080': [1080, 1080],
+  '9:16 1080×1920': [1080, 1920],
+  '16:9 1920×1080': [1920, 1080],
+};
+
+const params = {
+  seed: 1207,
+  width: 1080,
+  height: 1350,
+  paper: '#fbfbfb',
+  frame: { x: 0.1, y: 0.13, w: 0.8, h: 0.72 },
+  depth: 6,
+  minCell: 0.0737,
+  dropRate: 0.35,
+  stretchRate: 0.3,
+  syllables: ['HE', 'FE', 'TR', 'KA', 'BO', 'ND', 'AR', 'QU', 'OP', 'RE', 'XI', 'LE'],
+  fps: 30,
+  beatFrames: 10,
+  changeRate: 0.25,
+  duration: 8,
+  sourceBeats: 6,
+};
+
+// ---- randomness: every draw is keyed by (seed, beat, cellId) so frame N is reproducible
+
+function hash(...ns) {
+  let h = 0x811c9dc5;
+  for (const n of ns) {
+    h = Math.imul(h ^ (n | 0), 0x01000193);
+    h ^= h >>> 15;
+    h = Math.imul(h, 0x2c1b3c6d);
+    h ^= h >>> 12;
+  }
+  return h >>> 0;
+}
+
+function mulberry32(a) {
+  return function () {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const keyed = (...ns) => mulberry32(hash(...ns));
+
+// ---- geometry
+
+function frameRect(p) {
+  const x0 = Math.round(p.frame.x * p.width), y0 = Math.round(p.frame.y * p.height);
+  const x1 = Math.round((p.frame.x + p.frame.w) * p.width), y1 = Math.round((p.frame.y + p.frame.h) * p.height);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+function cellRect(c, F) {
+  const x0 = Math.round(F.x + c.x * F.w), x1 = Math.round(F.x + (c.x + c.w) * F.w);
+  const y0 = Math.round(F.y + c.y * F.h), y1 = Math.round(F.y + (c.y + c.h) * F.h);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+const near = (a, b) => Math.abs(a - b) < 1e-6;
+const minPx = (p, F) => p.minCell * Math.min(F.w, F.h);
+
+// ---- modes: one table entry per way a cell can show the source. mark is the label suffix.
+
+const MODES = {
+  photo: {
+    mark: '',
+    weight: () => 0,
+    draw(ctx, cv, R) {
+      ctx.drawImage(cv.src, (R.x - cv.ox) / cv.sc, (R.y - cv.oy) / cv.sc, R.w / cv.sc, R.h / cv.sc, R.x, R.y, R.w, R.h);
+    },
+  },
+  stretchH: {
+    mark: '*',
+    weight: (aspect) => (aspect >= 1 ? 0.65 : 0.35),
+    draw(ctx, cv, R, s) {
+      const sx = clamp((R.x + s * R.w - cv.ox) / cv.sc, 0, cv.sw - 1);
+      ctx.drawImage(cv.src, sx, (R.y - cv.oy) / cv.sc, 1, R.h / cv.sc, R.x, R.y, R.w, R.h);
+    },
+  },
+  stretchV: {
+    mark: '*',
+    weight: (aspect) => (aspect >= 1 ? 0.35 : 0.65),
+    draw(ctx, cv, R, s) {
+      const sy = clamp((R.y + s * R.h - cv.oy) / cv.sc, 0, cv.sh - 1);
+      ctx.drawImage(cv.src, (R.x - cv.ox) / cv.sc, sy, R.w / cv.sc, 1, R.x, R.y, R.w, R.h);
+    },
+  },
+};
+
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+function pickMode(rng, stretchRate, aspect) {
+  if (rng() >= stretchRate) return 'photo';
+  const ws = Object.entries(MODES).map(([m, d]) => [m, d.weight(aspect)]);
+  let r = rng() * ws.reduce((t, [, w]) => t + w, 0);
+  for (const [m, w] of ws) if ((r -= w) < 0) return m;
+  return 'photo';
+}
+
+function roll(c, rng, p, F, born) {
+  const syl = p.syllables.length ? p.syllables : ['XX'];
+  c.mode = pickMode(rng, p.stretchRate, (c.w * F.w) / (c.h * F.h));
+  c.label = syl[Math.floor(rng() * syl.length)];
+  c.num = 1 + Math.floor(rng() * 9);
+  c.sample = rng();
+  c.drift = (rng() < 0.5 ? -1 : 1) * (0.04 + rng() * 0.14);
+  c.born = born;
+  return c;
+}
+
+// ---- layout: recursive guillotine split of the frame, then ragged edge
+
+function layout(p, rng) {
+  const F = frameRect(p);
+  const min = minPx(p, F);
+  const cells = [];
+  let id = 0;
+  (function split(x, y, w, h, d) {
+    const pw = w * F.w, ph = h * F.h;
+    const stop = d >= p.depth || (d > 3 && rng() < 0.05 + d * 0.02);
+    const vertical = pw > ph ? rng() < 0.78 : rng() < 0.22;
+    const sliver = rng() < 0.16;
+    const r = sliver
+      ? (rng() < 0.5 ? 0.05 + rng() * 0.07 : 0.88 + rng() * 0.07)
+      : 0.25 + rng() * 0.5;
+    const len = vertical ? pw : ph;
+    if (stop || len * Math.min(r, 1 - r) < (sliver ? min * 0.3 : min)) {
+      cells.push({ id: id++, x, y, w, h });
+      return;
+    }
+    if (vertical) {
+      split(x, y, w * r, h, d + 1);
+      split(x + w * r, y, w - w * r, h, d + 1);
+    } else {
+      split(x, y, w, h * r, d + 1);
+      split(x, y + h * r, w, h - h * r, d + 1);
+    }
+  })(0, 0, 1, 1, 0);
+
+  const kept = cells.filter((c) => {
+    const edge = c.x < 1e-6 || c.y < 1e-6 || c.x + c.w > 1 - 1e-6 || c.y + c.h > 1 - 1e-6;
+    if (!edge) return true;
+    const big = c.w * c.h > 0.05 ? 0.25 : 1;
+    return rng() >= p.dropRate * big;
+  });
+  return (kept.length ? kept : cells).map((c) => roll(c, rng, p, F, 0));
+}
+
+// ---- sequence: evolve the base layout beat by beat from the seed
+
+function mergeable(a, b) {
+  if (near(a.y, b.y) && near(a.h, b.h) && (near(a.x + a.w, b.x) || near(b.x + b.w, a.x))) return 'h';
+  if (near(a.x, b.x) && near(a.w, b.w) && (near(a.y + a.h, b.y) || near(b.y + b.h, a.y))) return 'v';
+  return null;
+}
+
+function tryMerge(cells, rng, p, F, b, st) {
+  const pairs = [];
+  for (let i = 0; i < cells.length; i++)
+    for (let j = i + 1; j < cells.length; j++) {
+      const a = cells[i], c = cells[j];
+      if ((a.w * a.h + c.w * c.h) < 0.06 && mergeable(a, c)) pairs.push([i, j]);
+    }
+  if (!pairs.length) return false;
+  const [i, j] = pairs[Math.floor(rng() * pairs.length)];
+  const a = cells[i], c = cells[j];
+  const x = Math.min(a.x, c.x), y = Math.min(a.y, c.y);
+  const merged = { id: st.nextId++, x, y, w: Math.max(a.x + a.w, c.x + c.w) - x, h: Math.max(a.y + a.h, c.y + c.h) - y };
+  cells.splice(j, 1);
+  cells[i] = roll(merged, keyed(p.seed, b, merged.id, 7), p, F, b);
+  return true;
+}
+
+function trySplit(cells, rng, p, F, b, st) {
+  const min = minPx(p, F);
+  const cands = cells.map((c, i) => [c, i]).filter(([c]) => Math.min(c.w * F.w, c.h * F.h) >= 2.2 * min);
+  if (!cands.length) return false;
+  let r = rng() * cands.reduce((t, [c]) => t + c.w * c.h, 0);
+  let [c, i] = cands[cands.length - 1];
+  for (const cand of cands) if ((r -= cand[0].w * cand[0].h) < 0) { [c, i] = cand; break; }
+  const k = 0.3 + rng() * 0.4;
+  const parts = c.w * F.w >= c.h * F.h
+    ? [{ x: c.x, y: c.y, w: c.w * k, h: c.h }, { x: c.x + c.w * k, y: c.y, w: c.w - c.w * k, h: c.h }]
+    : [{ x: c.x, y: c.y, w: c.w, h: c.h * k }, { x: c.x, y: c.y + c.h * k, w: c.w, h: c.h - c.h * k }];
+  cells.splice(i, 1, ...parts.map((q) => {
+    q.id = st.nextId++;
+    return roll(q, keyed(p.seed, b, q.id, 7), p, F, b);
+  }));
+  return true;
+}
+
+function step(st, p, b) {
+  const F = frameRect(p);
+  const next = { beat: b, cells: st.cells.map((c) => ({ ...c })), nextId: st.nextId, changeRate: st.changeRate };
+  if (b % 4 === 0) {
+    const r = keyed(p.seed, b, 0x7fffffff);
+    const ops = r() < 0.5 ? [tryMerge, trySplit] : [trySplit, tryMerge];
+    ops.some((op) => op(next.cells, r, p, F, b, next));
+  }
+  for (const c of next.cells) {
+    if (c.born === b) continue;
+    const r = keyed(p.seed, b, c.id);
+    if (r() < p.changeRate) roll(c, r, p, F, b);
+  }
+  return next;
+}
+
+const evolution = new WeakMap();
+
+function cellsAt(baseCells, p, beat) {
+  let st = evolution.get(baseCells);
+  if (!st || st.beat > beat || st.changeRate !== p.changeRate) {
+    st = { beat: 0, cells: baseCells, nextId: baseCells.reduce((m, c) => Math.max(m, c.id), 0) + 1, changeRate: p.changeRate };
+  }
+  while (st.beat < beat) st = step(st, p, st.beat + 1);
+  evolution.set(baseCells, st);
+  return st.cells;
+}
+
+let baseKey = '', baseCells = null;
+function baseFor(p) {
+  const key = JSON.stringify([p.seed, p.width, p.height, p.frame, p.depth, p.minCell, p.dropRate, p.stretchRate, p.syllables]);
+  if (key !== baseKey) {
+    baseKey = key;
+    baseCells = layout(p, keyed(p.seed, 0x9e3779b9));
+  }
+  return baseCells;
+}
+
+// ---- render
+
+function sourceSize(s) {
+  if (!s) return null;
+  if (s instanceof HTMLVideoElement) return s.readyState >= 2 && s.videoWidth ? { w: s.videoWidth, h: s.videoHeight } : null;
+  if (s instanceof HTMLImageElement) return s.naturalWidth ? { w: s.naturalWidth, h: s.naturalHeight } : null;
+  return s.width ? { w: s.width, h: s.height } : null;
+}
+
+function coverOf(src, F) {
+  const s = sourceSize(src);
+  if (!s) return null;
+  const sc = Math.max(F.w / s.w, F.h / s.h);
+  return { src, sc, sw: s.w, sh: s.h, ox: F.x + (F.w - s.w * sc) / 2, oy: F.y + (F.h - s.h * sc) / 2 };
+}
+
+function glide(c, f, p) {
+  const v = c.sample + c.drift * (f - c.born * p.beatFrames) / p.beatFrames;
+  const t = ((v % 2) + 2) % 2;
+  return t <= 1 ? t : 2 - t;
+}
+
+const linear = (v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+
+function inkFor(ctx, x, y, w, h) {
+  if (w < 1 || h < 1) return '#000';
+  const d = ctx.getImageData(Math.round(x), Math.round(y), Math.round(w), Math.round(h)).data;
+  let L = 0;
+  for (let i = 0; i < d.length; i += 4) L += 0.2126 * linear(d[i] / 255) + 0.7152 * linear(d[i + 1] / 255) + 0.0722 * linear(d[i + 2] / 255);
+  L /= d.length / 4;
+  return (L + 0.05) / 0.05 >= 1.05 / (L + 0.05) ? '#000' : '#fff';
+}
+
+function render(ctx, source, p, frameIndex) {
+  const F = frameRect(p);
+  const cells = cellsAt(baseFor(p), p, Math.floor(frameIndex / p.beatFrames));
+  const cv = coverOf(source, F);
+  const k = Math.min(p.width, p.height) / 1080;
+  const rects = cells.map((c) => cellRect(c, F));
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = p.paper;
+  ctx.fillRect(0, 0, p.width, p.height);
+
+  if (cv) {
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    cells.forEach((c, i) => {
+      const R = rects[i];
+      if (R.w > 0 && R.h > 0) MODES[c.mode].draw(ctx, cv, R, glide(c, frameIndex, p));
+    });
+  }
+
+  ctx.strokeStyle = '#a0a0a0';
+  ctx.lineWidth = Math.max(1, Math.round(k));
+  ctx.beginPath();
+  for (const R of rects) ctx.rect(R.x + 0.5, R.y + 0.5, R.w, R.h);
+  ctx.stroke();
+
+  const inset = 6 * k;
+  const inks = rects.map((R) => inkFor(ctx, R.x + 1, R.y + 1, Math.min(R.w - 2, 34 * k), Math.min(R.h - 2, 36 * k)));
+  ctx.textBaseline = 'top';
+  cells.forEach((c, i) => {
+    const R = rects[i];
+    if (R.w < 10 * k || R.h < 14 * k) return;
+    ctx.fillStyle = inks[i];
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(R.x, R.y, R.w, R.h);
+    ctx.clip();
+    ctx.font = `700 ${15 * k}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+    ctx.fillText(c.label, R.x + inset, R.y + inset);
+    ctx.font = `400 ${12 * k}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+    ctx.fillText(c.num + MODES[c.mode].mark, R.x + inset, R.y + inset + 18 * k);
+    ctx.restore();
+  });
+  ctx.restore();
+}
+
+// ---- demo source: soft shapes on near-white so the tool is never empty
+
+function makeDemo() {
+  const W = 1200, H = 1500;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  const r = keyed(42);
+  g.fillStyle = '#f4f3ef';
+  g.fillRect(0, 0, W, H);
+  g.translate(620, 820);
+  g.scale(1.18, 1.18);
+  g.translate(-620, -820);
+
+  const blob = (x, y, rx, ry, rot, inner, outer) => {
+    g.save();
+    g.translate(x, y);
+    g.rotate(rot);
+    g.scale(1, ry / rx);
+    const grad = g.createRadialGradient(-rx * 0.25, -rx * 0.3, rx * 0.05, 0, 0, rx);
+    grad.addColorStop(0, inner);
+    grad.addColorStop(1, outer);
+    g.fillStyle = grad;
+    g.beginPath();
+    g.arc(0, 0, rx, 0, Math.PI * 2);
+    g.fill();
+    g.restore();
+  };
+
+  blob(640, 820, 430, 300, -0.5, '#d9c7a8', '#8a6a48');
+  blob(520, 700, 300, 180, -0.9, '#4b4d55', '#1d1e22');
+  blob(820, 980, 260, 120, 0.4, '#b9532f', '#6b2412');
+  blob(380, 420, 150, 140, 0, '#e8e2d6', '#55565c');
+  blob(300, 470, 60, 22, 0.2, '#e3a53a', '#9a5d0d');
+  blob(860, 560, 120, 120, 0, '#9fb3c4', '#3f5468');
+
+  g.save();
+  g.beginPath();
+  g.ellipse(700, 1060, 360, 150, 0.3, 0, Math.PI * 2);
+  g.clip();
+  for (let y = 880; y < 1260; y += 8 + r() * 16) {
+    g.fillStyle = r() < 0.5 ? 'rgba(20,20,24,0.55)' : 'rgba(240,232,214,0.6)';
+    g.fillRect(300, y, 800, 2 + r() * 6);
+  }
+  g.restore();
+
+  for (let i = 0; i < 260; i++) {
+    const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 420;
+    g.fillStyle = r() < 0.6 ? 'rgba(30,30,34,0.5)' : 'rgba(250,246,236,0.75)';
+    g.beginPath();
+    g.arc(620 + Math.cos(a) * d, 820 + Math.sin(a) * d * 0.8, 2 + r() * 7, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  g.strokeStyle = '#2a2a2e';
+  g.lineWidth = 10;
+  g.lineCap = 'round';
+  g.beginPath();
+  g.moveTo(560, 1180); g.lineTo(520, 1400);
+  g.moveTo(680, 1200); g.lineTo(700, 1410);
+  g.stroke();
+  return cv;
+}
+
+const DEMO = makeDemo();
+
+// ---- app
+
+const view = document.getElementById('view');
+const ctx = view.getContext('2d');
+const stage = document.getElementById('stage');
+const $ = (id) => document.getElementById(id);
+
+const state = { sources: [], playing: true, frame: 0, recording: false, dirty: true };
+const totalFrames = () => Math.max(1, Math.round(params.duration * params.fps));
+
+function sourceIndexAt(f) {
+  if (!state.sources.length) return -1;
+  const beat = Math.floor(f / params.beatFrames);
+  return Math.floor(beat / params.sourceBeats) % state.sources.length;
+}
+
+function sourceAt(f) {
+  const i = sourceIndexAt(f);
+  return i < 0 ? DEMO : state.sources[i].el;
+}
+
+function setStatus(t) { $('status').textContent = t; }
+
+function resize() {
+  view.width = params.width;
+  view.height = params.height;
+  fit();
+  state.dirty = true;
+}
+
+function fit() {
+  const r = stage.getBoundingClientRect();
+  const pad = r.width < 500 ? 16 : 32;
+  const s = Math.min((r.width - pad * 2) / params.width, (r.height - pad * 2) / params.height);
+  view.style.width = Math.max(1, params.width * s) + 'px';
+  view.style.height = Math.max(1, params.height * s) + 'px';
+}
+new ResizeObserver(fit).observe(stage);
+
+const SLIDERS = [
+  { box: 'grid-sliders', id: 'density', label: 'Density', min: 1, max: 10, step: 1, value: 3,
+    apply: (v) => { params.depth = 3 + v; params.minCell = +(0.14 / (1 + 0.3 * v)).toFixed(4); } },
+  { box: 'grid-sliders', id: 'ragged', label: 'Ragged', min: 0, max: 0.8, step: 0.01, value: params.dropRate,
+    apply: (v) => { params.dropRate = v; } },
+  { box: 'grid-sliders', id: 'stretch', label: 'Stretch', min: 0, max: 1, step: 0.01, value: params.stretchRate,
+    apply: (v) => { params.stretchRate = v; } },
+  { box: 'motion-sliders', id: 'tempo', label: 'Tempo', min: 2, max: 48, step: 1, value: params.beatFrames, unit: 'f',
+    apply: (v) => { params.beatFrames = v; } },
+  { box: 'motion-sliders', id: 'change', label: 'Change', min: 0, max: 1, step: 0.01, value: params.changeRate,
+    apply: (v) => { params.changeRate = v; } },
+  { box: 'motion-sliders', id: 'every', label: 'Source', min: 1, max: 32, step: 1, value: params.sourceBeats, unit: 'b',
+    apply: (v) => { params.sourceBeats = v; } },
+  { box: 'motion-sliders', id: 'duration', label: 'Length', min: 1, max: 30, step: 1, value: params.duration, unit: 's',
+    apply: (v) => { params.duration = v; syncScrub(); } },
+];
+
+for (const s of SLIDERS) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = `<label for="${s.id}">${s.label}</label>
+    <input id="${s.id}" type="range" min="${s.min}" max="${s.max}" step="${s.step}" value="${s.value}">
+    <output for="${s.id}"></output>`;
+  $(s.box).appendChild(row);
+  const input = row.querySelector('input'), out = row.querySelector('output');
+  const update = () => {
+    const v = +input.value;
+    s.apply(v);
+    out.textContent = (s.step < 1 ? v.toFixed(2) : String(v)) + (s.unit || '');
+    state.dirty = true;
+  };
+  input.addEventListener('input', update);
+  update();
+}
+
+for (const name of Object.keys(ASPECTS)) $('aspect').add(new Option(name, name));
+$('aspect').addEventListener('change', (e) => {
+  [params.width, params.height] = ASPECTS[e.target.value];
+  resize();
+});
+
+$('seed').value = params.seed;
+$('seed').addEventListener('input', (e) => {
+  const v = Math.floor(+e.target.value);
+  if (Number.isFinite(v)) { params.seed = v; state.dirty = true; }
+});
+$('reroll').addEventListener('click', () => {
+  params.seed = 1 + Math.floor(Math.random() * 99999);
+  $('seed').value = params.seed;
+  state.dirty = true;
+});
+
+$('syllables').value = params.syllables.join(' ');
+$('syllables').addEventListener('input', (e) => {
+  params.syllables = e.target.value.toUpperCase().split(/[\s,]+/).filter(Boolean);
+  state.dirty = true;
+});
+
+$('play').addEventListener('click', () => {
+  state.playing = !state.playing;
+  $('play').textContent = state.playing ? 'Pause' : 'Play';
+});
+
+function syncScrub() {
+  $('scrub').max = totalFrames() - 1;
+  state.frame = Math.min(state.frame, totalFrames() - 1);
+}
+$('scrub').addEventListener('input', (e) => { state.frame = +e.target.value; state.dirty = true; });
+
+// ---- sources
+
+async function loadSource(file) {
+  const url = URL.createObjectURL(file);
+  if (file.type.startsWith('video/')) {
+    const v = document.createElement('video');
+    v.muted = true;
+    v.defaultMuted = true;
+    v.loop = true;
+    v.playsInline = true;
+    v.preload = 'auto';
+    v.src = url;
+    await new Promise((ok, fail) => {
+      v.addEventListener('loadeddata', ok, { once: true });
+      v.addEventListener('error', () => fail(new Error('cannot decode')), { once: true });
+    });
+    return { name: file.name, kind: 'video', el: v };
+  }
+  const img = new Image();
+  img.src = url;
+  await img.decode();
+  return { name: file.name, kind: 'image', el: img };
+}
+
+async function addFiles(files) {
+  const list = [...files].filter((f) => /^(image|video)\//.test(f.type));
+  if (!list.length) { setStatus('No images or videos in that drop.'); return; }
+  for (const f of list) {
+    setStatus(`Loading ${f.name}`);
+    try { state.sources.push(await loadSource(f)); }
+    catch (err) { setStatus(`Could not open ${f.name}: ${err.message}`); continue; }
+  }
+  setStatus(`${state.sources.length} source${state.sources.length === 1 ? '' : 's'}`);
+  renderSourceList();
+  state.dirty = true;
+}
+
+function renderSourceList() {
+  const active = sourceIndexAt(state.frame);
+  $('sources').innerHTML = '';
+  state.sources.forEach((s, i) => {
+    const li = document.createElement('li');
+    li.className = i === active ? 'on' : '';
+    li.innerHTML = `<span>${String(i + 1).padStart(2, '0')}</span><span></span><span>${s.kind === 'video' ? 'VID' : 'IMG'}</span>`;
+    li.children[1].textContent = s.name;
+    $('sources').appendChild(li);
+  });
+  $('clear').disabled = !state.sources.length;
+}
+
+$('files').addEventListener('change', (e) => { addFiles(e.target.files); e.target.value = ''; });
+$('clear').addEventListener('click', () => {
+  for (const s of state.sources) {
+    if (s.kind === 'video') s.el.pause();
+    URL.revokeObjectURL(s.el.src);
+  }
+  state.sources = [];
+  renderSourceList();
+  setStatus('Demo source');
+  state.dirty = true;
+});
+
+let dragDepth = 0;
+addEventListener('dragenter', (e) => { e.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
+addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
+addEventListener('dragover', (e) => e.preventDefault());
+addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove('dragging');
+  addFiles(e.dataTransfer.files);
+});
+
+function syncVideos(active) {
+  for (const s of state.sources) {
+    if (s.kind !== 'video') continue;
+    if (s.el === active && s.el.paused && state.playing) s.el.play().catch(() => {});
+    else if ((s.el !== active || !state.playing) && !s.el.paused) s.el.pause();
+  }
+}
+
+// ---- loop
+
+let last = performance.now(), acc = 0, lastActive = -2;
+function tick(now) {
+  if (!state.recording) {
+    const dt = 1000 / params.fps;
+    if (state.playing) {
+      acc = Math.min(acc + now - last, 250);
+      while (acc >= dt) {
+        state.frame = (state.frame + 1) % totalFrames();
+        acc -= dt;
+        state.dirty = true;
+      }
+    }
+    const src = sourceAt(state.frame);
+    syncVideos(src);
+    if (state.dirty || src instanceof HTMLVideoElement) {
+      render(ctx, src, params, state.frame);
+      state.dirty = false;
+      $('scrub').value = state.frame;
+      $('frame-out').textContent = String(state.frame).padStart(4, '0');
+      const ai = sourceIndexAt(state.frame);
+      if (ai !== lastActive) { lastActive = ai; renderSourceList(); }
+    }
+  }
+  last = now;
+  requestAnimationFrame(tick);
+}
+
+// ---- export
+
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+const stem = () => `sequence-${params.seed}-${params.width}x${params.height}`;
+const toBlob = (canvas) => new Promise((ok) => canvas.toBlob(ok, 'image/png'));
+
+function setBusy(busy) {
+  for (const id of ['png', 'video', 'frames']) $(id).disabled = busy;
+  if (!busy && !window.MediaRecorder) $('video').disabled = true;
+}
+
+$('png').addEventListener('click', async () => {
+  render(ctx, sourceAt(state.frame), params, state.frame);
+  download(await toBlob(view), `${stem()}-f${String(state.frame).padStart(4, '0')}.png`);
+});
+
+const VIDEO_TYPES = ['video/mp4;codecs=avc1.42E01E', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'];
+
+async function exportVideo() {
+  const mime = VIDEO_TYPES.find((t) => MediaRecorder.isTypeSupported(t));
+  if (!mime) { setStatus('This browser cannot record video.'); return; }
+  setBusy(true);
+  state.recording = true;
+  const n = totalFrames(), dt = 1000 / params.fps;
+  const stream = view.captureStream(0);
+  const track = stream.getVideoTracks()[0];
+  const manual = typeof track.requestFrame === 'function';
+  const rec = new MediaRecorder(manual ? stream : view.captureStream(params.fps), { mimeType: mime, videoBitsPerSecond: 16e6 });
+  const chunks = [];
+  rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  const stopped = new Promise((ok) => { rec.onstop = ok; });
+  render(ctx, sourceAt(0), params, 0);
+  rec.start();
+  let i = 0, due = performance.now();
+  await new Promise((done) => {
+    const stepRec = (now) => {
+      if (now >= due) {
+        const src = sourceAt(i);
+        syncVideos(src);
+        render(ctx, src, params, i);
+        if (manual) track.requestFrame();
+        i++;
+        due += dt;
+        if (i % params.fps === 0) setStatus(`Recording ${Math.round((i / n) * 100)}%`);
+      }
+      if (i < n) requestAnimationFrame(stepRec);
+      else setTimeout(done, dt * 2);
+    };
+    requestAnimationFrame(stepRec);
+  });
+  rec.stop();
+  await stopped;
+  stream.getTracks().forEach((t) => t.stop());
+  const type = mime.split(';')[0];
+  download(new Blob(chunks, { type }), `${stem()}.${type === 'video/mp4' ? 'mp4' : 'webm'}`);
+  setStatus(`Saved ${n} frames as ${type === 'video/mp4' ? 'MP4' : 'WebM'}`);
+  state.recording = false;
+  state.dirty = true;
+  setBusy(false);
+}
+$('video').addEventListener('click', () => exportVideo().catch((err) => {
+  setStatus(`Video export failed: ${err.message}`);
+  state.recording = false;
+  setBusy(false);
+}));
+
+function loadJSZip() {
+  if (window.JSZip) return Promise.resolve();
+  return new Promise((ok, fail) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    s.onload = ok;
+    s.onerror = () => fail(new Error('could not load JSZip (offline?)'));
+    document.head.appendChild(s);
+  });
+}
+
+function seek(video, t) {
+  return new Promise((ok) => {
+    if (Math.abs(video.currentTime - t) < 1e-3) return ok();
+    video.addEventListener('seeked', ok, { once: true });
+    video.currentTime = t;
+  });
+}
+
+async function exportFrames() {
+  setBusy(true);
+  await loadJSZip();
+  const wasPlaying = state.playing;
+  state.playing = false;
+  for (const s of state.sources) if (s.kind === 'video') s.el.pause();
+  const zip = new JSZip();
+  const off = document.createElement('canvas');
+  off.width = params.width;
+  off.height = params.height;
+  const octx = off.getContext('2d');
+  const n = totalFrames();
+  for (let i = 0; i < n; i++) {
+    const src = sourceAt(i);
+    if (src instanceof HTMLVideoElement && src.duration) await seek(src, (i / params.fps) % src.duration);
+    render(octx, src, params, i);
+    zip.file(`frame_${String(i).padStart(5, '0')}.png`, await toBlob(off));
+    if (i % 10 === 0) setStatus(`Rendering frame ${i + 1} of ${n}`);
+  }
+  setStatus('Zipping');
+  download(await zip.generateAsync({ type: 'blob' }), `${stem()}-frames.zip`);
+  setStatus(`Saved ${n} PNG frames`);
+  state.playing = wasPlaying;
+  state.dirty = true;
+  setBusy(false);
+}
+$('frames').addEventListener('click', () => exportFrames().catch((err) => {
+  setStatus(`Frame export failed: ${err.message}`);
+  setBusy(false);
+}));
+
+window.Seq = { render, layout, cellsAt, params, MODES, baseFor, keyed, demo: DEMO, addFiles, state };
+
+resize();
+syncScrub();
+renderSourceList();
+setBusy(false);
+setStatus('Demo source');
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
