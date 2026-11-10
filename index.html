@@ -123,6 +123,10 @@
       <input id="files" type="file" accept="image/*,video/*" multiple>
     </label>
     <ul class="sources" id="sources"></ul>
+    <div class="row wide">
+      <label for="subject">Subject</label>
+      <input id="subject" type="text" spellcheck="false" autocomplete="off" placeholder="auto">
+    </div>
     <div style="padding:8px 0 12px"><button id="clear">Use demo</button></div>
 
     <h2>CANVAS</h2>
@@ -162,6 +166,8 @@
   </aside>
 </div>
 
+<script src="shader.js"></script>
+<script src="subject.js"></script>
 <script>
 'use strict';
 
@@ -181,7 +187,7 @@ const params = {
   depth: 6,
   minCell: 0.0737,
   dropRate: 0.35,
-  stretchRate: 0.3,
+  stretchRate: 0.5,
   syllables: ['HE', 'FE', 'TR', 'KA', 'BO', 'ND', 'AR', 'QU', 'OP', 'RE', 'XI', 'LE'],
   fps: 30,
   beatFrames: 10,
@@ -231,38 +237,14 @@ function cellRect(c, F) {
 const near = (a, b) => Math.abs(a - b) < 1e-6;
 const minPx = (p, F) => p.minCell * Math.min(F.w, F.h);
 
-// ---- modes: one table entry per way a cell can show the source. mark is the label suffix.
+// ---- modes: the registry lives in shader.js (one table entry + one GLSL branch per mode)
 
-const MODES = {
-  photo: {
-    mark: '',
-    weight: () => 0,
-    draw(ctx, cv, R) {
-      ctx.drawImage(cv.src, (R.x - cv.ox) / cv.sc, (R.y - cv.oy) / cv.sc, R.w / cv.sc, R.h / cv.sc, R.x, R.y, R.w, R.h);
-    },
-  },
-  stretchH: {
-    mark: '*',
-    weight: (aspect) => (aspect >= 1 ? 0.65 : 0.35),
-    draw(ctx, cv, R, s) {
-      const sx = clamp((R.x + s * R.w - cv.ox) / cv.sc, 0, cv.sw - 1);
-      ctx.drawImage(cv.src, sx, (R.y - cv.oy) / cv.sc, 1, R.h / cv.sc, R.x, R.y, R.w, R.h);
-    },
-  },
-  stretchV: {
-    mark: '*',
-    weight: (aspect) => (aspect >= 1 ? 0.35 : 0.65),
-    draw(ctx, cv, R, s) {
-      const sy = clamp((R.y + s * R.h - cv.oy) / cv.sc, 0, cv.sh - 1);
-      ctx.drawImage(cv.src, (R.x - cv.ox) / cv.sc, sy, R.w / cv.sc, 1, R.x, R.y, R.w, R.h);
-    },
-  },
-};
+const MODES = Shader.MODES;
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
-function pickMode(rng, stretchRate, aspect) {
-  if (rng() >= stretchRate) return 'photo';
+function pickMode(rng, effectRate, aspect) {
+  if (rng() >= effectRate) return 'photo';
   const ws = Object.entries(MODES).map(([m, d]) => [m, d.weight(aspect)]);
   let r = rng() * ws.reduce((t, [, w]) => t + w, 0);
   for (const [m, w] of ws) if ((r -= w) < 0) return m;
@@ -271,23 +253,34 @@ function pickMode(rng, stretchRate, aspect) {
 
 function roll(c, rng, p, F, born) {
   const syl = p.syllables.length ? p.syllables : ['XX'];
-  c.mode = pickMode(rng, p.stretchRate, (c.w * F.w) / (c.h * F.h));
+  const mode = c.primary ? 'photo' : pickMode(rng, p.stretchRate, (c.w * F.w) / (c.h * F.h));
+  c.prev = c.mode || mode;
+  c.mode = mode;
   c.label = syl[Math.floor(rng() * syl.length)];
   c.num = 1 + Math.floor(rng() * 9);
   c.sample = rng();
   c.drift = (rng() < 0.5 ? -1 : 1) * (0.04 + rng() * 0.14);
+  c.seed = rng();
   c.born = born;
   return c;
 }
 
-// ---- layout: recursive guillotine split of the frame, then ragged edge
+// ---- layout: carve the primary block out of the frame, guillotine-split the rest, then ragged edge
 
-function layout(p, rng) {
+function carve(P, rng) {
+  const e = 1e-6, out = [];
+  const strips = [[0, 0, P.x, 1], [P.x + P.w, 0, 1 - P.x - P.w, 1], [P.x, 0, P.w, P.y], [P.x, P.y + P.h, P.w, 1 - P.y - P.h]];
+  const rows = [[0, 0, 1, P.y], [0, P.y + P.h, 1, 1 - P.y - P.h], [0, P.y, P.x, P.h], [P.x + P.w, P.y, 1 - P.x - P.w, P.h]];
+  for (const r of rng() < 0.5 ? strips : rows) if (r[2] > e && r[3] > e) out.push(r);
+  return out;
+}
+
+function layout(p, rng, P) {
   const F = frameRect(p);
   const min = minPx(p, F);
   const cells = [];
   let id = 0;
-  (function split(x, y, w, h, d) {
+  function split(x, y, w, h, d) {
     const pw = w * F.w, ph = h * F.h;
     const stop = d >= p.depth || (d > 3 && rng() < 0.05 + d * 0.02);
     const vertical = pw > ph ? rng() < 0.78 : rng() < 0.22;
@@ -307,9 +300,12 @@ function layout(p, rng) {
       split(x, y, w, h * r, d + 1);
       split(x, y + h * r, w, h - h * r, d + 1);
     }
-  })(0, 0, 1, 1, 0);
+  }
+  for (const [x, y, w, h] of P ? carve(P, rng) : [[0, 0, 1, 1]]) split(x, y, w, h, P ? 1 : 0);
+  if (P) cells.push({ id: id++, ...P, primary: true });
 
   const kept = cells.filter((c) => {
+    if (c.primary) return true;
     const edge = c.x < 1e-6 || c.y < 1e-6 || c.x + c.w > 1 - 1e-6 || c.y + c.h > 1 - 1e-6;
     if (!edge) return true;
     const big = c.w * c.h > 0.05 ? 0.25 : 1;
@@ -331,7 +327,7 @@ function tryMerge(cells, rng, p, F, b, st) {
   for (let i = 0; i < cells.length; i++)
     for (let j = i + 1; j < cells.length; j++) {
       const a = cells[i], c = cells[j];
-      if ((a.w * a.h + c.w * c.h) < 0.06 && mergeable(a, c)) pairs.push([i, j]);
+      if (!a.primary && !c.primary && (a.w * a.h + c.w * c.h) < 0.06 && mergeable(a, c)) pairs.push([i, j]);
     }
   if (!pairs.length) return false;
   const [i, j] = pairs[Math.floor(rng() * pairs.length)];
@@ -345,7 +341,7 @@ function tryMerge(cells, rng, p, F, b, st) {
 
 function trySplit(cells, rng, p, F, b, st) {
   const min = minPx(p, F);
-  const cands = cells.map((c, i) => [c, i]).filter(([c]) => Math.min(c.w * F.w, c.h * F.h) >= 2.2 * min);
+  const cands = cells.map((c, i) => [c, i]).filter(([c]) => !c.primary && Math.min(c.w * F.w, c.h * F.h) >= 2.2 * min);
   if (!cands.length) return false;
   let r = rng() * cands.reduce((t, [c]) => t + c.w * c.h, 0);
   let [c, i] = cands[cands.length - 1];
@@ -390,11 +386,11 @@ function cellsAt(baseCells, p, beat) {
 }
 
 let baseKey = '', baseCells = null;
-function baseFor(p) {
-  const key = JSON.stringify([p.seed, p.width, p.height, p.frame, p.depth, p.minCell, p.dropRate, p.stretchRate, p.syllables]);
+function baseFor(p, P) {
+  const key = JSON.stringify([p.seed, p.width, p.height, p.frame, p.depth, p.minCell, p.dropRate, p.stretchRate, p.syllables, P]);
   if (key !== baseKey) {
     baseKey = key;
-    baseCells = layout(p, keyed(p.seed, 0x9e3779b9));
+    baseCells = layout(p, keyed(p.seed, 0x9e3779b9), P);
   }
   return baseCells;
 }
@@ -408,11 +404,62 @@ function sourceSize(s) {
   return s.width ? { w: s.width, h: s.height } : null;
 }
 
-function coverOf(src, F) {
+// ---- subject: the camera fits the subject's box into the frame; the primary block is fixed from the first detection
+
+const RECORDS = new WeakMap();
+
+function watchSubject(el, kind, method = state.subjectMethod) {
+  const rec = { anchor: null, tracker: null, lastT: -1 };
+  RECORDS.set(el, rec);
+  const anchor = (r) => { rec.anchor = { box: r.box, core: r.core }; state.dirty = true; };
+  const prompt = state.subjectPrompt;
+  const classic = Subject.detect(el, { method: 'classic' }).then(anchor);
+  if (kind === 'video') {
+    rec.tracker = Subject.tracker({ method, prompt, delay: 0.7 });
+    rec.lastT = el.currentTime;
+    Promise.all([classic, rec.tracker.update(el, el.currentTime)]).then(() => anchor(rec.tracker.at(el.currentTime)));
+  } else {
+    if (method !== 'classic') classic.then(() => Subject.detect(el, { method, prompt })).then(anchor).catch(() => {});
+  }
+}
+
+function trackSubject(el) {
+  const rec = RECORDS.get(el);
+  if (!rec || !rec.tracker || Math.abs(el.currentTime - rec.lastT) < 0.4) return null;
+  rec.lastT = el.currentTime;
+  return rec.tracker.update(el, el.currentTime);
+}
+
+function subjectFor(el) {
+  const rec = RECORDS.get(el);
+  if (!rec || !rec.anchor) return null;
+  const box = rec.tracker && rec.tracker.keyframes ? rec.tracker.at(el.currentTime).box : rec.anchor.box;
+  return { box, anchor: rec.anchor };
+}
+
+function cameraOf(src, F, box) {
   const s = sourceSize(src);
   if (!s) return null;
-  const sc = Math.max(F.w / s.w, F.h / s.h);
-  return { src, sc, sw: s.w, sh: s.h, ox: F.x + (F.w - s.w * sc) / 2, oy: F.y + (F.h - s.h * sc) / 2 };
+  const base = Math.max(F.w / s.w, F.h / s.h);
+  if (!box) return { src, sc: base, sw: s.w, sh: s.h, ox: F.x + (F.w - s.w * base) / 2, oy: F.y + (F.h - s.h * base) / 2 };
+  const m = 1.24;
+  const sc = clamp(Math.min(F.w / (box.w * s.w * m), F.h / (box.h * s.h * m)), base, base * 4);
+  const cx = (box.x + box.w / 2) * s.w, cy = (box.y + box.h / 2) * s.h;
+  return {
+    src, sc, sw: s.w, sh: s.h,
+    ox: clamp(F.x + F.w / 2 - cx * sc, F.x + F.w - s.w * sc, F.x),
+    oy: clamp(F.y + F.h / 2 - cy * sc, F.y + F.h - s.h * sc, F.y),
+  };
+}
+
+function primaryIn(cam, F, core) {
+  const q = (v) => Math.round(clamp(v, 0, 1) * 48) / 48;
+  const fw = (core.w * cam.sw * cam.sc) / F.w, fh = (core.h * cam.sh * cam.sc) / F.h;
+  const k = Math.min(1, 0.7 / fw, 0.7 / fh, Math.sqrt(0.4 / (fw * fh)));
+  core = { x: core.x + (core.w * (1 - k)) / 2, y: core.y, w: core.w * k, h: core.h * k };
+  const x0 = q((cam.ox + core.x * cam.sw * cam.sc - F.x) / F.w), x1 = q((cam.ox + (core.x + core.w) * cam.sw * cam.sc - F.x) / F.w);
+  const y0 = q((cam.oy + core.y * cam.sh * cam.sc - F.y) / F.h), y1 = q((cam.oy + (core.y + core.h) * cam.sh * cam.sc - F.y) / F.h);
+  return x1 - x0 >= 3 / 48 && y1 - y0 >= 3 / 48 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
 }
 
 function glide(c, f, p) {
@@ -432,10 +479,19 @@ function inkFor(ctx, x, y, w, h) {
   return (L + 0.05) / 0.05 >= 1.05 / (L + 0.05) ? '#000' : '#fff';
 }
 
+const GL = (() => {
+  const canvas = document.createElement('canvas');
+  const r = Shader.create(canvas);
+  return r && { ...r, canvas };
+})();
+
 function render(ctx, source, p, frameIndex) {
   const F = frameRect(p);
-  const cells = cellsAt(baseFor(p), p, Math.floor(frameIndex / p.beatFrames));
-  const cv = coverOf(source, F);
+  const subj = subjectFor(source);
+  const cv = cameraOf(source, F, subj && subj.box);
+  const anchorCam = subj && cameraOf(source, F, subj.anchor.box);
+  const P = anchorCam && primaryIn(anchorCam, F, subj.anchor.core);
+  const cells = cellsAt(baseFor(p, P), p, Math.floor(frameIndex / p.beatFrames));
   const k = Math.min(p.width, p.height) / 1080;
   const rects = cells.map((c) => cellRect(c, F));
 
@@ -445,13 +501,18 @@ function render(ctx, source, p, frameIndex) {
   ctx.fillStyle = p.paper;
   ctx.fillRect(0, 0, p.width, p.height);
 
-  if (cv) {
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    cells.forEach((c, i) => {
-      const R = rects[i];
-      if (R.w > 0 && R.h > 0) MODES[c.mode].draw(ctx, cv, R, glide(c, frameIndex, p));
+  if (cv && GL) {
+    const fade = 8 * p.fps / 30;
+    GL.draw({
+      source: cv.src, cover: cv, width: p.width, height: p.height, paper: p.paper, fps: p.fps,
+      cells: cells.map((c, i) => {
+        const age = frameIndex - c.born * p.beatFrames;
+        return { ...rects[i], mode: c.mode, prev: c.prev, mix: Math.min(1, age / fade), sample: glide(c, frameIndex, p), seed: c.seed, age };
+      }),
     });
+    ctx.drawImage(GL.canvas, 0, 0);
+  } else if (cv) {
+    for (const R of rects) ctx.drawImage(cv.src, (R.x - cv.ox) / cv.sc, (R.y - cv.oy) / cv.sc, R.w / cv.sc, R.h / cv.sc, R.x, R.y, R.w, R.h);
   }
 
   ctx.strokeStyle = '#a0a0a0';
@@ -465,7 +526,7 @@ function render(ctx, source, p, frameIndex) {
   ctx.textBaseline = 'top';
   cells.forEach((c, i) => {
     const R = rects[i];
-    if (R.w < 10 * k || R.h < 14 * k) return;
+    if (R.w < 34 * k || R.h < 40 * k) return;
     ctx.fillStyle = inks[i];
     ctx.save();
     ctx.beginPath();
@@ -545,6 +606,10 @@ function makeDemo() {
 }
 
 const DEMO = makeDemo();
+Subject.onProgress((e) => {
+  if (e.total && e.progress < 1) setStatus(`Loading subject model ${Math.round(e.progress * 100)}%`);
+  else if (e.status === 'ready' || e.progress === 1) setStatus('Subject model ready');
+});
 
 // ---- app
 
@@ -553,7 +618,7 @@ const ctx = view.getContext('2d');
 const stage = document.getElementById('stage');
 const $ = (id) => document.getElementById(id);
 
-const state = { sources: [], playing: true, frame: 0, recording: false, dirty: true };
+const state = { subjectMethod: 'auto', subjectPrompt: '', sources: [], playing: true, frame: 0, recording: false, dirty: true };
 const totalFrames = () => Math.max(1, Math.round(params.duration * params.fps));
 
 function sourceIndexAt(f) {
@@ -590,7 +655,7 @@ const SLIDERS = [
     apply: (v) => { params.depth = 3 + v; params.minCell = +(0.14 / (1 + 0.3 * v)).toFixed(4); } },
   { box: 'grid-sliders', id: 'ragged', label: 'Ragged', min: 0, max: 0.8, step: 0.01, value: params.dropRate,
     apply: (v) => { params.dropRate = v; } },
-  { box: 'grid-sliders', id: 'stretch', label: 'Stretch', min: 0, max: 1, step: 0.01, value: params.stretchRate,
+  { box: 'grid-sliders', id: 'stretch', label: 'Effects', min: 0, max: 1, step: 0.01, value: params.stretchRate,
     apply: (v) => { params.stretchRate = v; } },
   { box: 'motion-sliders', id: 'tempo', label: 'Tempo', min: 2, max: 48, step: 1, value: params.beatFrames, unit: 'f',
     apply: (v) => { params.beatFrames = v; } },
@@ -670,11 +735,13 @@ async function loadSource(file) {
       v.addEventListener('loadeddata', ok, { once: true });
       v.addEventListener('error', () => fail(new Error('cannot decode')), { once: true });
     });
+    watchSubject(v, 'video');
     return { name: file.name, kind: 'video', el: v };
   }
   const img = new Image();
   img.src = url;
   await img.decode();
+  watchSubject(img, 'image');
   return { name: file.name, kind: 'image', el: img };
 }
 
@@ -703,6 +770,15 @@ function renderSourceList() {
   });
   $('clear').disabled = !state.sources.length;
 }
+
+let promptTimer = 0;
+$('subject').addEventListener('input', (e) => {
+  clearTimeout(promptTimer);
+  promptTimer = setTimeout(() => {
+    state.subjectPrompt = e.target.value.trim();
+    for (const s of state.sources) watchSubject(s.el, s.kind);
+  }, 500);
+});
 
 $('files').addEventListener('change', (e) => { addFiles(e.target.files); e.target.value = ''; });
 $('clear').addEventListener('click', () => {
@@ -751,6 +827,7 @@ function tick(now) {
     }
     const src = sourceAt(state.frame);
     syncVideos(src);
+    if (src instanceof HTMLVideoElement) trackSubject(src);
     if (state.dirty || src instanceof HTMLVideoElement) {
       render(ctx, src, params, state.frame);
       state.dirty = false;
@@ -889,8 +966,9 @@ $('frames').addEventListener('click', () => exportFrames().catch((err) => {
   setBusy(false);
 }));
 
-window.Seq = { render, layout, cellsAt, params, MODES, baseFor, keyed, demo: DEMO, addFiles, state };
+window.Seq = { render, layout, cellsAt, params, MODES, baseFor, keyed, demo: DEMO, addFiles, state, watchSubject, trackSubject, subjectFor, cameraOf, records: RECORDS };
 
+watchSubject(DEMO, 'image', 'classic');
 resize();
 syncScrub();
 renderSourceList();

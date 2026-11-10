@@ -1,8 +1,27 @@
 # Sequences
 
-Sequences turns images and videos into short animated pieces. The source shows through an irregular grid of cells on off-white paper. Each cell carries a small label: two letters, then a digit. A digit followed by `*` marks a stretch cell, which shows one line of the source smeared across the whole cell instead of the photo. Labels print in black, or in white where the picture under them is dark.
+Sequences turns images and videos into short animated pieces. It finds the main subject, puts a clean primary block on it, and builds an irregular grid of cells around it on off-white paper. In video the camera follows the subject.
 
-The grid changes on a beat. Some cells change mode and label, and now and then a cell splits or two neighbours merge. Stretch cells scan slowly across the source between beats.
+The other cells show the same picture through a shader pane. The label suffix says which one:
+
+| Suffix | Pane |
+|---|---|
+| none | clean photo |
+| `*` | stretch: one row or column smeared across the cell |
+| `°` | black and white |
+| `#` | reeded glass |
+| `@` | the cell's patch turned by quarter turns |
+| `/` | a plane hinged on one edge, tilted back |
+
+Each label is two letters and a digit plus that suffix. It prints in black, or in white where the picture under it is dark.
+
+The grid changes on a beat. Some cells change pane and label, crossfading as they do, and now and then a cell splits or two neighbours merge. The primary block stays.
+
+## Finding the subject
+
+`Subject` is empty by default, which finds animals and people first and falls back to the most striking region (a waterfall, a flower). Type what you want (`bee`, `dog, cat`) to pick something else.
+
+The first time, the page downloads two open models from the web (Grounding DINO tiny for objects, ormbg for the outline), about 450 MB, then keeps them cached. This is fast on a Mac's GPU (about half a second per look). Without a GPU it still works but takes many seconds per look. Offline, it uses a simple built-in method that only finds large, contrasting subjects.
 
 ## Open it
 
@@ -20,7 +39,7 @@ Videos play muted and loop.
 - `Seed` fixes the whole piece. The same seed and settings always give the same frames. `Reroll` picks a new seed.
 - `Density` sets how finely the grid is cut.
 - `Ragged` sets how many edge cells are left out, so the outline steps in and out.
-- `Stretch` sets the share of stretch cells.
+- `Effects` sets the share of shader panes. The rest show the clean photo.
 - `Syllables` lists the letter pairs used in labels, separated by spaces or commas.
 - `Tempo` sets frames per beat. Lower is faster.
 - `Change` sets the share of cells that change on each beat.
@@ -43,4 +62,4 @@ The page exposes `window.Seq`:
 - `Seq.render(ctx, source, params, frameIndex)` draws one frame.
 - `Seq.params` holds the live settings.
 
-To add a new way for a cell to show the source, add one entry to `MODES` in `index.html` with a `mark`, a `weight` and a `draw` function.
+`shader.js` holds the panes: one `MODES` row (id, suffix, weight) and one GLSL branch per pane. `subject.js` holds the subject finder (`Subject.detect`, `Subject.tracker`).
