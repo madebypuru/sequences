@@ -13,7 +13,7 @@ The other cells show the same picture through a shader pane. The label suffix sa
 | `@` | the cell's patch turned by quarter turns |
 | `/` | a plane hinged on one edge, tilted back |
 
-Each label is two letters and a digit plus that suffix. It prints in black, or in white where the picture under it is dark.
+Each label is two letters and a digit plus that suffix. It prints in black or white when that reads at 5:1 or better against the pixels under it, and on a small paper chip otherwise.
 
 The grid changes on a beat. Some cells change pane and label, crossfading as they do, and now and then a cell splits or two neighbours merge. The primary block stays.
 

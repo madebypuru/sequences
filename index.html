@@ -470,13 +470,18 @@ function glide(c, f, p) {
 
 const linear = (v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
 
+// Ink must reach 5:1 (4.5 plus headroom for video) against the light end (black) or the dark end (white)
+// of what sits under the label; otherwise the label gets a paper chip.
 function inkFor(ctx, x, y, w, h) {
-  if (w < 1 || h < 1) return '#000';
+  if (w < 1 || h < 1) return { ink: '#000', chip: false };
   const d = ctx.getImageData(Math.round(x), Math.round(y), Math.round(w), Math.round(h)).data;
-  let L = 0;
-  for (let i = 0; i < d.length; i += 4) L += 0.2126 * linear(d[i] / 255) + 0.7152 * linear(d[i + 1] / 255) + 0.0722 * linear(d[i + 2] / 255);
-  L /= d.length / 4;
-  return (L + 0.05) / 0.05 >= 1.05 / (L + 0.05) ? '#000' : '#fff';
+  const ls = new Float32Array(d.length / 4);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) ls[j] = 0.2126 * linear(d[i] / 255) + 0.7152 * linear(d[i + 1] / 255) + 0.0722 * linear(d[i + 2] / 255);
+  ls.sort();
+  const lo = ls[Math.floor(ls.length * 0.1)], hi = ls[Math.floor(ls.length * 0.9)];
+  if ((lo + 0.05) / 0.05 >= 5) return { ink: '#000', chip: false };
+  if (1.05 / (hi + 0.05) >= 5) return { ink: '#fff', chip: false };
+  return { ink: '#111', chip: true };
 }
 
 const GL = (() => {
@@ -522,16 +527,22 @@ function render(ctx, source, p, frameIndex) {
   ctx.stroke();
 
   const inset = 6 * k;
-  const inks = rects.map((R) => inkFor(ctx, R.x + 1, R.y + 1, Math.min(R.w - 2, 34 * k), Math.min(R.h - 2, 36 * k)));
+  const box = (R) => [R.x + 1, R.y + 1, Math.min(R.w - 2, 34 * k), Math.min(R.h - 2, 36 * k)];
+  const inks = rects.map((R) => inkFor(ctx, ...box(R)));
   ctx.textBaseline = 'top';
   cells.forEach((c, i) => {
     const R = rects[i];
     if (R.w < 34 * k || R.h < 40 * k) return;
-    ctx.fillStyle = inks[i];
     ctx.save();
     ctx.beginPath();
     ctx.rect(R.x, R.y, R.w, R.h);
     ctx.clip();
+    if (inks[i].chip) {
+      const [x, y, w, h] = box(R);
+      ctx.fillStyle = p.paper;
+      ctx.fillRect(x, y, w + 3 * k, h + 3 * k);
+    }
+    ctx.fillStyle = inks[i].ink;
     ctx.font = `700 ${15 * k}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
     ctx.fillText(c.label, R.x + inset, R.y + inset);
     ctx.font = `400 ${12 * k}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
