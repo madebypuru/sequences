@@ -1,0 +1,732 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sequences shader lab</title>
+<style>
+  :root {
+    --paper: #fbfbfb;
+    --ink: #111111;
+    --ink-2: #4a4a4a;
+    --rule: #a0a0a0;
+    --edge: #7a7a7a;
+    --stage: #e2e2df;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .app { display: grid; grid-template-columns: 230px minmax(0, 1fr) 340px; height: 100vh; }
+  .cat, .info { overflow-y: auto; padding: 16px; min-width: 0; }
+  .cat { border-right: 1px solid var(--rule); }
+  .info { border-left: 1px solid var(--rule); }
+  .centre { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--stage); }
+  .bar {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    padding: 10px 16px; background: var(--paper); border-bottom: 1px solid var(--rule);
+  }
+  .bar .sep { width: 1px; align-self: stretch; background: var(--rule); margin: 0 4px; }
+  #status { color: var(--ink-2); margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  #view { flex: 1; min-height: 0; overflow: auto; padding: 16px; display: flex; justify-content: center; align-items: flex-start; }
+  #frame { position: relative; box-shadow: 0 0 0 1px var(--rule); flex: none; }
+  #frame canvas { display: block; }
+  #overlay { position: absolute; left: 0; top: 0; touch-action: none; }
+  body.dragging #view { box-shadow: inset 0 0 0 2px var(--ink); }
+  h1 { font-size: 13px; letter-spacing: 0.08em; margin: 0 0 12px; }
+  h2 {
+    font-size: 11px; letter-spacing: 0.08em; margin: 0;
+    padding: 12px 0 6px; border-top: 1px solid var(--ink);
+  }
+  .fam { margin-bottom: 10px; }
+  .fam p { margin: 0 0 6px; color: var(--ink-2); }
+  .list { display: grid; grid-template-columns: 1fr; }
+  .pane {
+    font: inherit; color: var(--ink); background: var(--paper);
+    border: 0; border-top: 1px solid var(--rule); border-radius: 0;
+    display: grid; grid-template-columns: 20px minmax(0, 1fr) 12px; gap: 6px;
+    text-align: left; padding: 5px 4px; cursor: pointer;
+  }
+  .pane .m { font-weight: 700; text-align: center; }
+  .pane .s { text-align: right; }
+  .pane:hover { background: var(--stage); }
+  .pane.on { background: var(--ink); color: var(--paper); }
+  .pane.broken { text-decoration: line-through; }
+  .btn {
+    font: inherit; font-weight: 700; text-transform: uppercase;
+    color: var(--ink); background: var(--paper);
+    border: 1px solid var(--ink); border-radius: 0;
+    padding: 5px 10px; cursor: pointer;
+  }
+.btn:hover, .btn[aria-pressed=true] { background: var(--ink); color: var(--paper); }
+  label.btn { display: inline-block; position: relative; }
+  label.btn input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  .title { font-size: 18px; font-weight: 700; margin: 2px 0 2px; }
+  .meta { color: var(--ink-2); margin-bottom: 10px; }
+  .text dt { font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: 0.06em; margin-top: 10px; }
+  .text dd { margin: 2px 0 0; }
+  .row {
+    display: grid; grid-template-columns: 88px minmax(0, 1fr) 44px;
+    align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--rule);
+  }
+  .row > label { font-weight: 700; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row > output { text-align: right; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; margin: 0; accent-color: var(--ink); }
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 0 14px; }
+  textarea {
+    font: inherit; font-size: 11px; color: var(--ink); background: var(--paper);
+    border: 1px solid var(--edge); border-radius: 0; width: 100%; min-height: 120px; padding: 6px; resize: vertical;
+  }
+  .note { color: var(--ink-2); margin: 6px 0; }
+  #errors { white-space: pre-wrap; border: 2px solid var(--ink); padding: 8px; margin: 0 0 12px; }
+  #errors[hidden] { display: none; }
+  @media (max-width: 860px) {
+    .app { grid-template-columns: minmax(0, 1fr); height: auto; }
+    .centre { order: 1; }
+    .info { order: 2; border-left: 0; border-top: 1px solid var(--rule); overflow: visible; }
+    .cat { order: 3; border-right: 0; border-top: 1px solid var(--rule); overflow: visible; }
+    .list { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 8px; }
+    #view { flex: none; overflow: visible; }
+    #status { margin-left: 0; flex-basis: 100%; }
+    .bar .sep { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="cat" id="cat"><h1>PANES</h1></nav>
+
+  <main class="centre">
+    <div class="bar">
+      <button class="btn" id="demo">Demo</button>
+      <label class="btn" tabindex="0">Image / video<input id="files" type="file" accept="image/*,video/*"></label>
+      <button class="btn" id="camera">Camera</button>
+      <span class="sep"></span>
+      <button class="btn" id="compare" aria-pressed="false">Compare all</button>
+      <button class="btn" id="pause" aria-pressed="false">Pause</button>
+      <span id="status"></span>
+    </div>
+    <div id="view"><div id="frame"><canvas id="overlay"></canvas></div></div>
+  </main>
+
+  <aside class="info">
+    <h1>SHADER LAB</h1>
+    <pre id="errors" hidden></pre>
+    <div id="detail"></div>
+
+    <h2>SHORTLIST</h2>
+    <p class="note" id="shortCount"></p>
+    <textarea id="shortJson" readonly spellcheck="false"></textarea>
+    <div class="btns"><button class="btn" id="copy">Copy</button><button class="btn" id="clearShort">Clear</button></div>
+
+    <h2>WHAT IS A SHADER</h2>
+    <p>A shader is a tiny program the graphics chip runs once for every pixel, all at the same time. It answers one question: what colour is this pixel?</p>
+    <p>To answer, it can look up the photo anywhere it likes. Looking somewhere else is how bends, mirrors and smears work. Doing sums on the colour it found is how tone effects work.</p>
+    <p>Here the pane runs only inside the cell. Everything outside is the clean photo, so you can judge how each one sits next to it.</p>
+  </aside>
+</div>
+
+<script src="vendor/p5.min.js"></script>
+<script src="lab-shaders.js"></script>
+<script>
+'use strict';
+
+const PAPER = '#fbfbfb';
+const PAPER_RGB = [251 / 255, 251 / 255, 251 / 255];
+const SYL = ['HE', 'FE', 'TR', 'KA', 'BO', 'ND', 'AR', 'QU', 'OP', 'RE', 'XI', 'LE'];
+const FAMILIES = [
+  ['In the app', 'The panes Sequences uses today, rebuilt here so you can compare.'],
+  ['Tone', 'Changes colours only. Every pixel stays where it is.'],
+  ['Optics', 'Moves where each pixel looks, like glass or a lens in front of the photo.'],
+  ['Geometry', 'Rearranges the picture by a rule: fold, repeat, twist.'],
+  ['Signal', 'Imitates screens and broken video.'],
+];
+const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+
+const VERT = `
+attribute vec3 aPosition;
+uniform vec4 uTile;
+uniform vec2 uSize;
+void main() {
+  vec2 p = uTile.xy + aPosition.xy * uTile.zw;
+  vec2 c = p / uSize * 2.0 - 1.0;
+  gl_Position = vec4(c.x, -c.y, 0.0, 1.0);
+}`;
+
+const fragFor = (pane) => `${PANE_PRELUDE}
+vec3 pane(vec2 px) {${pane.glsl}
+}
+void main() {
+  vec2 px = vec2(gl_FragCoord.x, uSize.y * uDensity - gl_FragCoord.y) / uDensity;
+  bool inCell = px.x >= uRect.x && px.y >= uRect.y && px.x < uRect.x + uRect.z && px.y < uRect.y + uRect.w;
+  gl_FragColor = vec4(inCell ? pane(px) : photoAt(px), 1.0);
+}`;
+
+const byId = Object.fromEntries(PANES.map((p) => [p.id, p]));
+const labelOf = (p) => {
+  const i = PANES.indexOf(p);
+  return { syl: SYL[i % SYL.length], num: String((i * 7) % 9 + 1) + p.mark };
+};
+
+const qs = new URLSearchParams(location.search);
+const $ = (id) => document.getElementById(id);
+
+function loadSaved() {
+  try { return JSON.parse(localStorage.getItem('seq-lab') || '{}'); } catch (e) { return {}; }
+}
+const saved = loadSaved();
+const cellArg = (qs.get('cell') || '').split(',').map(Number);
+
+const state = {
+  id: byId[qs.get('pane')] ? qs.get('pane') : (byId[saved.id] ? saved.id : 'frosted'),
+  compare: qs.get('compare') === '1',
+  cell: cellArg.length === 4 && cellArg.every(Number.isFinite)
+    ? { x: cellArg[0], y: cellArg[1], w: cellArg[2], h: cellArg[3] }
+    : { x: 0.5, y: 0.2, w: 0.36, h: 0.42 },
+  values: {},
+  shortlist: Array.isArray(saved.shortlist) ? saved.shortlist.filter((id) => byId[id]) : [],
+  frozen: qs.has('t') ? Number(qs.get('t')) : null,
+  pausedAt: null,
+  source: null,
+  sourceName: '',
+  shaders: {},
+  broken: {},
+  tiles: [],
+  single: null,
+};
+for (const p of PANES) {
+  const v = {};
+  for (const prm of p.params) v[prm.key] = (saved.values && saved.values[p.id] && Number.isFinite(saved.values[p.id][prm.key])) ? saved.values[p.id][prm.key] : prm.value;
+  state.values[p.id] = v;
+}
+
+function persist() {
+  try { localStorage.setItem('seq-lab', JSON.stringify({ id: state.id, shortlist: state.shortlist, values: state.values })); } catch (e) { /* storage blocked */ }
+}
+
+function logError(msg) {
+  const el = $('errors');
+  el.hidden = false;
+  el.textContent += msg + '\n';
+  document.body.dataset.errors = String((Number(document.body.dataset.errors) || 0) + 1);
+}
+window.addEventListener('error', (e) => logError('Script error: ' + e.message));
+
+const now = () => state.frozen != null ? state.frozen : state.pausedAt != null ? state.pausedAt : millis() / 1000;
+
+// ---- source
+
+function makeDemo() {
+  const W = 1200, H = 1500;
+  const pg = createGraphics(W, H);
+  pg.pixelDensity(1);
+  const g = pg.drawingContext;
+  let seed = 42;
+  const r = () => {
+    seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  g.fillStyle = '#f4f3ef';
+  g.fillRect(0, 0, W, H);
+  g.translate(620, 820); g.scale(1.18, 1.18); g.translate(-620, -820);
+  const blob = (x, y, rx, ry, rot, inner, outer) => {
+    g.save(); g.translate(x, y); g.rotate(rot); g.scale(1, ry / rx);
+    const grad = g.createRadialGradient(-rx * 0.25, -rx * 0.3, rx * 0.05, 0, 0, rx);
+    grad.addColorStop(0, inner); grad.addColorStop(1, outer);
+    g.fillStyle = grad; g.beginPath(); g.arc(0, 0, rx, 0, Math.PI * 2); g.fill(); g.restore();
+  };
+  blob(640, 820, 430, 300, -0.5, '#d9c7a8', '#8a6a48');
+  blob(520, 700, 300, 180, -0.9, '#4b4d55', '#1d1e22');
+  blob(820, 980, 260, 120, 0.4, '#b9532f', '#6b2412');
+  blob(380, 420, 150, 140, 0, '#e8e2d6', '#55565c');
+  blob(300, 470, 60, 22, 0.2, '#e3a53a', '#9a5d0d');
+  blob(860, 560, 120, 120, 0, '#9fb3c4', '#3f5468');
+  g.save(); g.beginPath(); g.ellipse(700, 1060, 360, 150, 0.3, 0, Math.PI * 2); g.clip();
+  for (let y = 880; y < 1260; y += 8 + r() * 16) {
+    g.fillStyle = r() < 0.5 ? 'rgba(20,20,24,0.55)' : 'rgba(240,232,214,0.6)';
+    g.fillRect(300, y, 800, 2 + r() * 6);
+  }
+  g.restore();
+  for (let i = 0; i < 260; i++) {
+    const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 420;
+    g.fillStyle = r() < 0.6 ? 'rgba(30,30,34,0.5)' : 'rgba(250,246,236,0.75)';
+    g.beginPath(); g.arc(620 + Math.cos(a) * d, 820 + Math.sin(a) * d * 0.8, 2 + r() * 7, 0, Math.PI * 2); g.fill();
+  }
+  g.strokeStyle = '#2a2a2e'; g.lineWidth = 10; g.lineCap = 'round';
+  g.beginPath(); g.moveTo(560, 1180); g.lineTo(520, 1400); g.moveTo(680, 1200); g.lineTo(700, 1410); g.stroke();
+  return pg;
+}
+
+let DEMO = null;
+
+function sizeOf(s) {
+  if (!s) return null;
+  const el = s.elt;
+  if (el && el.tagName === 'VIDEO') return el.videoWidth ? { w: el.videoWidth, h: el.videoHeight } : null;
+  return s.width ? { w: s.width, h: s.height } : null;
+}
+
+function setSource(s, name) {
+  const old = state.source;
+  if (old && old !== DEMO && old.elt && old.elt.tagName === 'VIDEO') {
+    if (old.elt.srcObject) old.elt.srcObject.getTracks().forEach((t) => t.stop());
+    old.remove();
+  }
+  state.source = s;
+  state.sourceName = name;
+  $('status').textContent = name;
+  layout();
+}
+
+function useVideo(v, name) {
+  v.elt.muted = true;
+  v.elt.playsInline = true;
+  v.elt.setAttribute('playsinline', '');
+  v.volume(0);
+  v.hide();
+  const go = () => { v.loop(); setSource(v, name); };
+  if (v.elt.readyState >= 1) go(); else v.elt.addEventListener('loadedmetadata', go, { once: true });
+}
+
+function openPath(path, name, isVideo) {
+  $('status').textContent = 'Loading ' + name;
+  if (isVideo) return useVideo(createVideo(path), name);
+  loadImage(path, (img) => setSource(img, name), () => {
+    $('status').textContent = 'Could not open ' + name;
+    logError('Could not load image: ' + name);
+  });
+}
+
+function openFile(file) {
+  if (!file) return;
+  const kind = file.type.split('/')[0];
+  if (kind !== 'image' && kind !== 'video') return;
+  openPath(URL.createObjectURL(file), file.name, kind === 'video');
+}
+
+// ---- shaders
+
+function checkProgram(gl, pane) {
+  const bad = [];
+  const compile = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) bad.push(gl.getShaderInfoLog(s));
+    return s;
+  };
+  const v = compile(gl.VERTEX_SHADER, VERT), f = compile(gl.FRAGMENT_SHADER, fragFor(pane));
+  if (!bad.length) {
+    const prog = gl.createProgram();
+    gl.attachShader(prog, v); gl.attachShader(prog, f); gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) bad.push(gl.getProgramInfoLog(prog));
+    gl.deleteProgram(prog);
+  }
+  gl.deleteShader(v); gl.deleteShader(f);
+  return bad.join('\n');
+}
+
+// ---- layout
+
+const view = $('view');
+const overlay = $('overlay');
+const octx = overlay.getContext('2d');
+let cnv;
+
+function singleGeom() {
+  const s = sizeOf(state.source) || { w: 1200, h: 1500 };
+  const phone = window.innerWidth <= 860;
+  const aw = Math.max(200, view.clientWidth - 32);
+  const ah = phone ? window.innerHeight * 0.62 : Math.max(200, view.clientHeight - 32);
+  const sc = Math.min(aw / s.w, ah / s.h);
+  const cw = Math.max(1, Math.floor(s.w * sc)), ch = Math.max(1, Math.floor(s.h * sc));
+  const cover = { sc: Math.max(cw / s.w, ch / s.h), ox: 0, oy: 0 };
+  cover.ox = (cw - s.w * cover.sc) / 2;
+  cover.oy = (ch - s.h * cover.sc) / 2;
+  const c = state.cell;
+  return {
+    w: cw, h: ch, src: s, cover, k: Math.min(cw, ch) / 1080,
+    rect: { x: c.x * cw, y: c.y * ch, w: c.w * cw, h: c.h * ch },
+  };
+}
+
+function compareGeom(G) {
+  const R = G.rect;
+  let crop = { x: R.x - R.w * 0.3, y: R.y - R.h * 0.3, w: R.w * 1.6, h: R.h * 1.6 };
+  const asp = crop.w / crop.h;
+  if (asp < 0.7) { const nw = crop.h * 0.7; crop.x -= (nw - crop.w) / 2; crop.w = nw; }
+  if (asp > 1.4) { const nh = crop.w / 1.4; crop.y -= (nh - crop.h) / 2; crop.h = nh; }
+  crop.x = crop.w < G.w ? Math.min(Math.max(crop.x, 0), G.w - crop.w) : (G.w - crop.w) / 2;
+  crop.y = crop.h < G.h ? Math.min(Math.max(crop.y, 0), G.h - crop.h) : (G.h - crop.h) / 2;
+
+  const aw = Math.max(200, view.clientWidth - 32);
+  const gap = 12, strip = 24;
+  const cols = Math.max(2, Math.floor((aw + gap) / (150 + gap)));
+  const tw = Math.floor((aw - gap * (cols - 1)) / cols);
+  const th = Math.round(tw * crop.h / crop.w);
+  const rows = Math.ceil(PANES.length / cols);
+  const tiles = PANES.map((p, i) => {
+    const x = (i % cols) * (tw + gap), y = Math.floor(i / cols) * (th + strip + gap);
+    const f = tw / crop.w;
+    return {
+      pane: p, x, y, w: tw, h: th, k: G.k * f,
+      cover: { sc: G.cover.sc * f, ox: x + (G.cover.ox - crop.x) * f, oy: y + (G.cover.oy - crop.y) * f },
+      rect: { x: x + (R.x - crop.x) * f, y: y + (R.y - crop.y) * f, w: R.w * f, h: R.h * f },
+    };
+  });
+  return { w: aw, h: rows * (th + strip + gap) - gap, tiles, strip };
+}
+
+function layout() {
+  if (!cnv) return;
+  const G = singleGeom();
+  state.single = G;
+  let w = G.w, h = G.h;
+  if (state.compare) {
+    const C = compareGeom(G);
+    state.tiles = C.tiles;
+    state.strip = C.strip;
+    w = C.w; h = C.h;
+  }
+  if (width !== w || height !== h) resizeCanvas(w, h);
+  const d = pixelDensity();
+  overlay.width = Math.round(w * d); overlay.height = Math.round(h * d);
+  overlay.style.width = w + 'px'; overlay.style.height = h + 'px';
+  overlay.style.touchAction = state.compare ? 'pan-y' : 'none';
+  view.style.alignItems = state.compare ? 'flex-start' : 'center';
+}
+
+// ---- drawing
+
+function drawPane(p, tile, cover, cell, k) {
+  const sh = state.shaders[p.id];
+  const s = sizeOf(state.source);
+  shader(sh);
+  sh.setUniform('uTex', state.source);
+  sh.setUniform('uSrc', [s.w, s.h]);
+  sh.setUniform('uCover', [cover.sc, cover.ox, cover.oy]);
+  sh.setUniform('uRect', [cell.x, cell.y, cell.w, cell.h]);
+  sh.setUniform('uTile', [tile.x, tile.y, tile.w, tile.h]);
+  sh.setUniform('uSize', [width, height]);
+  sh.setUniform('uDensity', pixelDensity());
+  sh.setUniform('uTime', now());
+  sh.setUniform('uK', k);
+  sh.setUniform('uPaper', PAPER_RGB);
+  const v = state.values[p.id];
+  for (let i = 0; i < 4; i++) sh.setUniform('p' + i, p.params[i] ? v[p.params[i].key] : 0);
+  rect(0, 0, 1, 1);
+}
+
+const linear = (v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+function inkAt(x, y, w, h) {
+  const gl = drawingContext, d = pixelDensity();
+  const W = Math.max(1, Math.round(w * d)), H = Math.max(1, Math.round(h * d));
+  const buf = new Uint8Array(W * H * 4);
+  gl.readPixels(Math.round(x * d), Math.round((height - y - h) * d), W, H, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+  let L = 0, L2 = 0;
+  const n = buf.length / 4;
+  for (let i = 0; i < buf.length; i += 4) {
+    const l = 0.2126 * linear(buf[i] / 255) + 0.7152 * linear(buf[i + 1] / 255) + 0.0722 * linear(buf[i + 2] / 255);
+    L += l; L2 += l * l;
+  }
+  L /= n;
+  const busy = Math.sqrt(Math.max(0, L2 / n - L * L)) > 0.22;
+  return { ink: (L + 0.05) / 0.05 >= 1.05 / (L + 0.05) ? '#000' : '#fff', busy };
+}
+
+function drawLabel(p, R, scale) {
+  const big = Math.max(11, Math.round(15 * scale)), small = Math.max(11, Math.round(12 * scale));
+  const inset = Math.max(4, 6 * scale);
+  const lab = labelOf(p);
+  const bw = Math.min(R.w - 2, inset + big * 2.4), bh = Math.min(R.h - 2, inset + big + small + 4);
+  const under = inkAt(R.x + 1, R.y + 1, bw, bh);
+  octx.fillStyle = under.ink;
+  if (under.busy) {
+    octx.fillStyle = PAPER;
+    octx.fillRect(R.x + 1, R.y + 1, bw + inset * 0.5, bh + inset * 0.5);
+    octx.fillStyle = '#111';
+  }
+  octx.textBaseline = 'top';
+  octx.font = `700 ${big}px ${MONO}`;
+  octx.fillText(lab.syl, R.x + inset, R.y + inset);
+  octx.font = `400 ${small}px ${MONO}`;
+  octx.fillText(lab.num, R.x + inset, R.y + inset + big + 2);
+}
+
+function hairline(R) {
+  octx.strokeStyle = '#a0a0a0';
+  octx.lineWidth = 1;
+  octx.strokeRect(Math.round(R.x) + 0.5, Math.round(R.y) + 0.5, Math.round(R.w), Math.round(R.h));
+}
+
+function drawSingle() {
+  const G = state.single;
+  const p = byId[state.id];
+  drawPane(p, { x: 0, y: 0, w: width, h: height }, G.cover, G.rect, G.k);
+  hairline(G.rect);
+  drawLabel(p, G.rect, Math.max(0.85, G.k * 1.2));
+  const R = G.rect, hs = 12;
+  octx.fillStyle = '#111';
+  octx.fillRect(R.x + R.w - hs, R.y + R.h - hs, hs, hs);
+  octx.strokeStyle = '#fbfbfb';
+  octx.strokeRect(R.x + R.w - hs + 0.5, R.y + R.h - hs + 0.5, hs - 1, hs - 1);
+}
+
+function drawCompare() {
+  for (const t of state.tiles) {
+    if (state.broken[t.pane.id]) continue;
+    drawPane(t.pane, t, t.cover, t.rect, t.k);
+  }
+  for (const t of state.tiles) {
+    const clip = { x: Math.max(t.rect.x, t.x), y: Math.max(t.rect.y, t.y) };
+    const R = { x: clip.x, y: clip.y, w: Math.min(t.rect.x + t.rect.w, t.x + t.w) - clip.x, h: Math.min(t.rect.y + t.rect.h, t.y + t.h) - clip.y };
+    octx.save();
+    octx.beginPath(); octx.rect(t.x, t.y, t.w, t.h); octx.clip();
+    hairline(R);
+    drawLabel(t.pane, R, 0.75);
+    octx.restore();
+    const on = t.pane.id === state.id;
+    if (on) { octx.strokeStyle = '#111'; octx.lineWidth = 2; octx.strokeRect(t.x + 1, t.y + 1, t.w - 2, t.h - 2); }
+    octx.fillStyle = '#111';
+    octx.textBaseline = 'top';
+    octx.font = `${on || state.shortlist.includes(t.pane.id) ? 700 : 400} 12px ${MONO}`;
+    const mark = state.shortlist.includes(t.pane.id) ? '■ ' : '';
+    octx.fillText(`${mark}${t.pane.mark} ${t.pane.name}`, t.x, t.y + t.h + 5, t.w);
+  }
+}
+
+// ---- p5
+
+function setup() {
+  pixelDensity(Math.min(2, displayDensity()));
+  cnv = createCanvas(10, 10, WEBGL);
+  cnv.parent('frame');
+  $('frame').appendChild(overlay);
+  noStroke();
+  const gl = drawingContext;
+  let ok = 0;
+  for (const p of PANES) {
+    const err = checkProgram(gl, p);
+    if (err) { state.broken[p.id] = true; logError(`${p.id}: ${err}`); continue; }
+    state.shaders[p.id] = createShader(VERT, fragFor(p));
+    ok++;
+  }
+  document.body.dataset.compiled = String(ok);
+  DEMO = makeDemo();
+  buildCatalogue();
+  showDetail();
+  renderShortlist();
+  setCompare(state.compare);
+  if (state.broken[state.id]) state.id = PANES.find((p) => !state.broken[p.id]).id;
+  const src = qs.get('src');
+  if (src) openPath(src, src.split('/').slice(-2).join('/'), /\.(mp4|mov|webm|m4v)$/i.test(src));
+  else setSource(DEMO, 'Demo');
+}
+
+function draw() {
+  background(PAPER);
+  const d = pixelDensity();
+  octx.setTransform(d, 0, 0, d, 0, 0);
+  octx.clearRect(0, 0, width, height);
+  if (!state.source || !sizeOf(state.source) || !state.single) return;
+  if (state.compare) drawCompare(); else if (!state.broken[state.id]) drawSingle();
+  document.body.dataset.frames = String((Number(document.body.dataset.frames) || 0) + 1);
+}
+
+function windowResized() { layout(); }
+
+// ---- interaction
+
+let drag = null;
+const local = (e) => {
+  const b = overlay.getBoundingClientRect();
+  return { x: e.clientX - b.left, y: e.clientY - b.top };
+};
+function hitSingle(m) {
+  const R = state.single.rect;
+  if (Math.abs(m.x - (R.x + R.w)) < 16 && Math.abs(m.y - (R.y + R.h)) < 16) return 'resize';
+  if (m.x >= R.x && m.y >= R.y && m.x <= R.x + R.w && m.y <= R.y + R.h) return 'move';
+  return null;
+}
+const tileAt = (m) => state.tiles.find((t) => m.x >= t.x && m.x <= t.x + t.w && m.y >= t.y && m.y <= t.y + t.h + state.strip);
+
+overlay.addEventListener('pointerdown', (e) => {
+  const m = local(e);
+  if (state.compare) {
+    const t = tileAt(m);
+    if (t && !state.broken[t.pane.id]) { choosePane(t.pane.id); setCompare(false); }
+    return;
+  }
+  const kind = hitSingle(m);
+  if (!kind) return;
+  drag = { kind, m, cell: { ...state.cell } };
+  overlay.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+overlay.addEventListener('pointermove', (e) => {
+  const m = local(e);
+  if (state.compare) { overlay.style.cursor = tileAt(m) ? 'pointer' : 'default'; return; }
+  if (!drag) {
+    const k = hitSingle(m);
+    overlay.style.cursor = k === 'resize' ? 'nwse-resize' : k === 'move' ? 'move' : 'default';
+    return;
+  }
+  const G = state.single, c = drag.cell;
+  const dx = (m.x - drag.m.x) / G.w, dy = (m.y - drag.m.y) / G.h;
+  const minW = 40 / G.w, minH = 40 / G.h;
+  const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+  if (drag.kind === 'move') {
+    state.cell.x = clamp(c.x + dx, 0, 1 - c.w);
+    state.cell.y = clamp(c.y + dy, 0, 1 - c.h);
+  } else {
+    state.cell.w = clamp(c.w + dx, minW, 1 - c.x);
+    state.cell.h = clamp(c.h + dy, minH, 1 - c.y);
+  }
+  layout();
+});
+const endDrag = () => { drag = null; };
+overlay.addEventListener('pointerup', endDrag);
+overlay.addEventListener('pointercancel', endDrag);
+
+function setCompare(on) {
+  state.compare = on;
+  $('compare').setAttribute('aria-pressed', String(on));
+  $('compare').textContent = on ? 'Single view' : 'Compare all';
+  $('status').textContent = on ? 'Click a tile to open it. ■ marks your shortlist.' : state.sourceName;
+  layout();
+}
+
+function choosePane(id) {
+  state.id = id;
+  persist();
+  for (const b of document.querySelectorAll('.pane')) b.classList.toggle('on', b.dataset.id === id);
+  showDetail();
+}
+
+function buildCatalogue() {
+  const cat = $('cat');
+  for (const [fam, blurb] of FAMILIES) {
+    const sec = document.createElement('section');
+    sec.className = 'fam';
+    sec.innerHTML = `<h2>${fam.toUpperCase()}</h2><p></p><div class="list"></div>`;
+    sec.querySelector('p').textContent = blurb;
+    const list = sec.querySelector('.list');
+    for (const p of PANES.filter((q) => q.family === fam)) {
+      const b = document.createElement('button');
+      b.className = 'pane' + (p.id === state.id ? ' on' : '') + (state.broken[p.id] ? ' broken' : '');
+      b.dataset.id = p.id;
+      b.innerHTML = '<span class="m"></span><span class="n"></span><span class="s"></span>';
+      b.querySelector('.m').textContent = p.mark;
+      b.querySelector('.n').textContent = p.name;
+      b.title = p.what;
+      b.addEventListener('click', () => { if (!state.broken[p.id]) { choosePane(p.id); if (state.compare) setCompare(false); } });
+      list.appendChild(b);
+    }
+    cat.appendChild(sec);
+  }
+  markShortlist();
+}
+
+function markShortlist() {
+  for (const b of document.querySelectorAll('.pane')) b.querySelector('.s').textContent = state.shortlist.includes(b.dataset.id) ? '■' : '';
+}
+
+const fmt = (v, step) => (step >= 1 ? String(Math.round(v)) : v.toFixed(step >= 0.1 ? 1 : 2));
+
+function showDetail() {
+  const p = byId[state.id];
+  const lab = labelOf(p);
+  const el = $('detail');
+  el.innerHTML = '';
+  const add = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  };
+  el.append(add('h2', null, 'PANE'));
+  el.append(add('div', 'title', `${p.mark} ${p.name}`));
+  el.append(add('div', 'meta', `${p.family} · label ${lab.syl}${lab.num}`));
+  const dl = add('dl', 'text');
+  for (const [t, d] of [['What you see', p.what], ['How it works', p.how], ['Next to the photo', p.merge]]) dl.append(add('dt', null, t), add('dd', null, d));
+  el.append(dl);
+  el.append(add('h2', null, 'SETTINGS'));
+  for (const prm of p.params) {
+    const row = add('div', 'row');
+    const id = `prm-${prm.key}`;
+    const lab2 = add('label', null, prm.label); lab2.htmlFor = id;
+    const inp = add('input'); inp.type = 'range'; inp.id = id;
+    inp.min = prm.min; inp.max = prm.max; inp.step = prm.step; inp.value = state.values[p.id][prm.key];
+    const out = add('output', null, fmt(Number(inp.value), prm.step));
+    inp.addEventListener('input', () => {
+      state.values[p.id][prm.key] = Number(inp.value);
+      out.textContent = fmt(Number(inp.value), prm.step);
+      persist();
+      renderShortlist();
+    });
+    row.append(lab2, inp, out);
+    el.append(row);
+  }
+  const btns = add('div', 'btns');
+  const on = state.shortlist.includes(p.id);
+  const sl = add('button', 'btn', on ? 'On shortlist' : 'Add to shortlist');
+  sl.setAttribute('aria-pressed', String(on));
+  sl.addEventListener('click', () => {
+    state.shortlist = on ? state.shortlist.filter((x) => x !== p.id) : [...state.shortlist, p.id];
+    persist(); markShortlist(); renderShortlist(); showDetail();
+  });
+  const reset = add('button', 'btn', 'Reset');
+  reset.addEventListener('click', () => {
+    for (const prm of p.params) state.values[p.id][prm.key] = prm.value;
+    persist(); renderShortlist(); showDetail();
+  });
+  btns.append(sl, reset);
+  el.append(btns);
+}
+
+function renderShortlist() {
+  const list = state.shortlist.map((id) => ({ id, name: byId[id].name, mark: byId[id].mark, params: state.values[id] }));
+  $('shortCount').textContent = list.length
+    ? `${list.length} pane${list.length > 1 ? 's' : ''}. Copy this and paste it back to Claude.`
+    : 'Nothing yet. Open a pane and press Add to shortlist.';
+  $('shortJson').value = JSON.stringify(list, null, 1);
+}
+
+$('copy').addEventListener('click', async () => {
+  const ta = $('shortJson');
+  try { await navigator.clipboard.writeText(ta.value); }
+  catch (e) { ta.choosePane(); document.execCommand('copy'); }
+  $('copy').textContent = 'Copied';
+  setTimeout(() => { $('copy').textContent = 'Copy'; }, 1200);
+});
+$('clearShort').addEventListener('click', () => { state.shortlist = []; persist(); markShortlist(); renderShortlist(); showDetail(); });
+$('compare').addEventListener('click', () => setCompare(!state.compare));
+$('pause').addEventListener('click', () => {
+  state.pausedAt = state.pausedAt == null ? millis() / 1000 : null;
+  $('pause').setAttribute('aria-pressed', String(state.pausedAt != null));
+  $('pause').textContent = state.pausedAt != null ? 'Play' : 'Pause';
+});
+$('demo').addEventListener('click', () => setSource(DEMO, 'Demo'));
+$('files').addEventListener('change', (e) => { openFile(e.target.files[0]); e.target.value = ''; });
+$('camera').addEventListener('click', () => {
+  $('status').textContent = 'Asking for the camera';
+  const cap = createCapture({ video: true, audio: false }, () => {});
+  cap.hide();
+  const go = () => setSource(cap, 'Camera');
+  if (cap.elt.readyState >= 1) go(); else cap.elt.addEventListener('loadedmetadata', go, { once: true });
+});
+window.addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('dragging'); });
+window.addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dragging'); });
+window.addEventListener('drop', (e) => {
+  e.preventDefault();
+  document.body.classList.remove('dragging');
+  openFile([...e.dataTransfer.files].find((f) => /^(image|video)\//.test(f.type)));
+});
+</script>
+</body>
+</html>

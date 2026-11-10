@@ -63,3 +63,9 @@ The page exposes `window.Seq`:
 - `Seq.params` holds the live settings.
 
 `shader.js` holds the panes: one `MODES` row (id, suffix, weight) and one GLSL branch per pane. `subject.js` holds the subject finder (`Subject.detect`, `Subject.tracker`).
+
+## Shader lab
+
+`lab.html` is a p5.js page for exploring panes that could be added. It has a catalogue of 25 candidates in five families (the panes in the app today, tone, optics, geometry, signal). Each one has a plain explanation of what it does, how it works and how well it sits next to the clean photo. Pick one to run it in a cell you can drag and resize over your own image or video, or press `Compare all` to see every pane on the same picture. Add the ones you like to the shortlist and copy the JSON. Those are the settings to bring into `shader.js`.
+
+It runs offline: p5.js 1.11.13 is kept in `vendor/`. The candidates live in `lab-shaders.js`, one entry per pane.
