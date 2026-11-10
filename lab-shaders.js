@@ -48,6 +48,15 @@ float bayer8(vec2 a) { return bayer4(0.5 * a) * 0.25 + bayer2(a); }
 
 window.PANES = [
   {
+    id: 'photo', name: 'Clean photo', family: 'In the app', mark: '',
+    what: 'The photo itself, untouched. The primary block and about half the other cells in the app show this.',
+    how: 'Each pixel reads the photo at its own spot. Nothing else happens.',
+    merge: 'It is the photo. Clean cells give the effect panes something calm to sit against.',
+    params: [],
+    glsl: `
+  return photoAt(px);`,
+  },
+  {
     id: 'stretch', name: 'Stretch', family: 'In the app', mark: '*',
     what: 'One row or column of the picture smeared across the whole cell.',
     how: 'Every pixel in the cell ignores where it is along one direction and reads the same single line of the photo. That line slowly slides back and forth, so the smear changes colour over time.',

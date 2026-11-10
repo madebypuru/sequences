@@ -66,6 +66,15 @@ The page exposes `window.Seq`:
 
 ## Shader lab
 
-`lab.html` is a p5.js page for exploring panes that could be added. It has a catalogue of 25 candidates in five families (the panes in the app today, tone, optics, geometry, signal). Each one has a plain explanation of what it does, how it works and how well it sits next to the clean photo. Pick one to run it in a cell you can drag and resize over your own image or video, or press `Compare all` to see every pane on the same picture. Add the ones you like to the shortlist and copy the JSON. Those are the settings to bring into `shader.js`.
+`lab.html` is a p5.js page for exploring panes that could be added. It has a catalogue of 25 candidates in five families (the panes in the app today, tone, optics, geometry, signal), plus a clean photo. Each one has a plain explanation of what it does, how it works and how well it sits next to the clean photo.
+
+Build a picture from cells two ways:
+
+- **By hand.** Drag on an empty part of the picture to draw a cell. Click a cell to select it, then pick a pane, drag to move, drag the corner to resize, or press Delete to remove it.
+- **Grid.** `Grid` builds the app's first-iteration layout on paper: a ragged grid with a clean primary block, the other cells taking panes from your shortlist (or all panes when the shortlist is empty). `Seed`, `Density`, `Ragged` and `Effects` shape it, and `Animate` re-rolls some cells every beat. Generated cells can be edited like hand-drawn ones.
+
+`Paper outside` switches what shows outside the cells. `Compare all` shows every pane on the same picture. Add panes to the shortlist and copy its JSON, or copy the `Layout` JSON to hand back a whole composition.
+
+Labels print in black or white when that reads at 5:1 or better against the pixels under them, and on a small paper chip otherwise.
 
 It runs offline: p5.js 1.11.13 is kept in `vendor/`. The candidates live in `lab-shaders.js`, one entry per pane.

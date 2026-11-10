@@ -62,6 +62,8 @@
     padding: 5px 10px; cursor: pointer;
   }
 .btn:hover, .btn[aria-pressed=true] { background: var(--ink); color: var(--paper); }
+  .btn:disabled { color: var(--ink-2); border-color: var(--ink-2); cursor: default; }
+  .btn:disabled:hover { background: var(--paper); color: var(--ink-2); }
   label.btn { display: inline-block; position: relative; }
   label.btn input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
   .title { font-size: 18px; font-weight: 700; margin: 2px 0 2px; }
@@ -75,6 +77,12 @@
   .row > label { font-weight: 700; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row > output { text-align: right; font-variant-numeric: tabular-nums; }
   input[type=range] { width: 100%; margin: 0; accent-color: var(--ink); }
+  input[type=number] {
+    font: inherit; color: var(--ink); background: var(--paper);
+    border: 1px solid var(--edge); border-radius: 0; width: 100%; min-width: 0; padding: 3px 6px;
+  }
+  .row.seed { grid-template-columns: 88px minmax(0, 1fr) auto; }
+  .row.seed .btn { padding: 3px 8px; }
   .btns { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 0 14px; }
   textarea {
     font: inherit; font-size: 11px; color: var(--ink); background: var(--paper);
@@ -105,6 +113,10 @@
       <label class="btn" tabindex="0">Image / video<input id="files" type="file" accept="image/*,video/*"></label>
       <button class="btn" id="camera">Camera</button>
       <span class="sep"></span>
+      <button class="btn" id="grid">Grid</button>
+      <button class="btn" id="animate" aria-pressed="false">Animate</button>
+      <button class="btn" id="clearCells">Clear cells</button>
+      <span class="sep"></span>
       <button class="btn" id="compare" aria-pressed="false">Compare all</button>
       <button class="btn" id="pause" aria-pressed="false">Pause</button>
       <span id="status"></span>
@@ -115,6 +127,12 @@
   <aside class="info">
     <h1>SHADER LAB</h1>
     <pre id="errors" hidden></pre>
+
+    <h2>CELLS</h2>
+    <p class="note" id="cellNote"></p>
+    <div class="btns"><button class="btn" id="removeCell">Remove cell</button><button class="btn" id="outside" aria-pressed="false">Paper outside</button></div>
+    <div id="gridRows"></div>
+
     <div id="detail"></div>
 
     <h2>SHORTLIST</h2>
@@ -122,10 +140,15 @@
     <textarea id="shortJson" readonly spellcheck="false"></textarea>
     <div class="btns"><button class="btn" id="copy">Copy</button><button class="btn" id="clearShort">Clear</button></div>
 
+    <h2>LAYOUT</h2>
+    <p class="note">The cells, the settings of the panes they use, and what shows outside them. Copy this and paste it back to Claude.</p>
+    <textarea id="layoutJson" readonly spellcheck="false"></textarea>
+    <div class="btns"><button class="btn" id="copyLayout">Copy</button></div>
+
     <h2>WHAT IS A SHADER</h2>
     <p>A shader is a tiny program the graphics chip runs once for every pixel, all at the same time. It answers one question: what colour is this pixel?</p>
     <p>To answer, it can look up the photo anywhere it likes. Looking somewhere else is how bends, mirrors and smears work. Doing sums on the colour it found is how tone effects work.</p>
-    <p>Here the pane runs only inside the cell. Everything outside is the clean photo, so you can judge how each one sits next to it.</p>
+    <p>Here each pane runs only inside its cell. Outside the cells you see the clean photo or the paper, so you can judge how each one sits next to the picture.</p>
   </aside>
 </div>
 
@@ -145,6 +168,12 @@ const FAMILIES = [
   ['Signal', 'Imitates screens and broken video.'],
 ];
 const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+const DEFAULT_CELL = { x: 0.5, y: 0.2, w: 0.36, h: 0.42 };
+const GRID_FRAME = { x: 0.1, y: 0.08, w: 0.8, h: 0.84 };
+const GRID_DEFAULTS = { seed: 1207, density: 3, ragged: 0.35, effects: 0.5, animate: false };
+const BEAT_SECONDS = 1;
+const CHANGE_RATE = 0.25;
+const MIN_CELL_PX = 24;
 
 const VERT = `
 attribute vec3 aPosition;
@@ -168,8 +197,30 @@ void main() {
 const byId = Object.fromEntries(PANES.map((p) => [p.id, p]));
 const labelOf = (p) => {
   const i = PANES.indexOf(p);
-  return { syl: SYL[i % SYL.length], num: String((i * 7) % 9 + 1) + p.mark };
+  return { syl: SYL[i % SYL.length], num: (i * 7) % 9 + 1 };
 };
+const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+
+// Same keyed randomness as index.html: every draw depends only on (seed, beat, cell id).
+function hashInts(...ns) {
+  let h = 0x811c9dc5;
+  for (const n of ns) {
+    h = Math.imul(h ^ (n | 0), 0x01000193);
+    h ^= h >>> 15;
+    h = Math.imul(h, 0x2c1b3c6d);
+    h ^= h >>> 12;
+  }
+  return h >>> 0;
+}
+function mulberry32(a) {
+  return function () {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const keyed = (...ns) => mulberry32(hashInts(...ns));
 
 const qs = new URLSearchParams(location.search);
 const $ = (id) => document.getElementById(id);
@@ -180,12 +231,37 @@ function loadSaved() {
 const saved = loadSaved();
 const cellArg = (qs.get('cell') || '').split(',').map(Number);
 
+function readCells(list) {
+  if (!Array.isArray(list)) return null;
+  const ok = list.filter((c) => c && ['x', 'y', 'w', 'h'].every((k) => Number.isFinite(c[k])) && byId[c.pane]);
+  return ok.map((c) => ({
+    x: c.x, y: c.y, w: c.w, h: c.h, pane: c.pane,
+    label: SYL.includes(c.label) ? c.label : SYL[0],
+    num: Number.isInteger(c.num) && c.num >= 1 && c.num <= 9 ? c.num : 1,
+    primary: !!c.primary,
+  }));
+}
+
+const firstPane = byId[qs.get('pane')] ? qs.get('pane') : (byId[saved.id] ? saved.id : 'frosted');
+let startCells = readCells(saved.cells);
+if (cellArg.length === 4 && cellArg.every(Number.isFinite)) startCells = [{ x: cellArg[0], y: cellArg[1], w: cellArg[2], h: cellArg[3], pane: firstPane }];
+if (!startCells) startCells = [{ ...DEFAULT_CELL, pane: firstPane }];
+startCells.forEach((c, i) => {
+  c.id = i + 1;
+  if (!c.label) { const l = labelOf(byId[c.pane]); c.label = l.syl; c.num = l.num; c.primary = false; }
+});
+
+const savedGrid = saved.grid || {};
 const state = {
-  id: byId[qs.get('pane')] ? qs.get('pane') : (byId[saved.id] ? saved.id : 'frosted'),
+  id: firstPane,
   compare: qs.get('compare') === '1',
-  cell: cellArg.length === 4 && cellArg.every(Number.isFinite)
-    ? { x: cellArg[0], y: cellArg[1], w: cellArg[2], h: cellArg[3] }
-    : { x: 0.5, y: 0.2, w: 0.36, h: 0.42 },
+  cells: startCells,
+  sel: startCells.length === 1 && !saved.cells ? 1 : (startCells.some((c) => c.id === saved.sel) ? saved.sel : null),
+  nextId: startCells.length + 1,
+  outside: saved.outside === 'paper' ? 'paper' : 'photo',
+  grid: Object.fromEntries(Object.entries(GRID_DEFAULTS).map(([k, v]) => [k, typeof savedGrid[k] === typeof v ? savedGrid[k] : v])),
+  gridLive: false,
+  beat: null,
   values: {},
   shortlist: Array.isArray(saved.shortlist) ? saved.shortlist.filter((id) => byId[id]) : [],
   frozen: qs.has('t') ? Number(qs.get('t')) : null,
@@ -196,6 +272,8 @@ const state = {
   broken: {},
   tiles: [],
   single: null,
+  draft: null,
+  inks: new Map(),
 };
 for (const p of PANES) {
   const v = {};
@@ -203,8 +281,17 @@ for (const p of PANES) {
   state.values[p.id] = v;
 }
 
+const selectedCell = () => state.cells.find((c) => c.id === state.sel) || null;
+const paneOf = (c) => byId[state.broken[c.pane] ? 'photo' : c.pane];
+if (selectedCell()) state.id = selectedCell().pane;
+
 function persist() {
-  try { localStorage.setItem('seq-lab', JSON.stringify({ id: state.id, shortlist: state.shortlist, values: state.values })); } catch (e) { /* storage blocked */ }
+  try {
+    localStorage.setItem('seq-lab', JSON.stringify({
+      id: state.id, shortlist: state.shortlist, values: state.values,
+      cells: state.cells, sel: state.sel, outside: state.outside, grid: state.grid,
+    }));
+  } catch (e) { /* storage blocked */ }
 }
 
 function logError(msg) {
@@ -224,13 +311,7 @@ function makeDemo() {
   const pg = createGraphics(W, H);
   pg.pixelDensity(1);
   const g = pg.drawingContext;
-  let seed = 42;
-  const r = () => {
-    seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+  const r = mulberry32(42);
   g.fillStyle = '#f4f3ef';
   g.fillRect(0, 0, W, H);
   g.translate(620, 820); g.scale(1.18, 1.18); g.translate(-620, -820);
@@ -331,6 +412,83 @@ function checkProgram(gl, pane) {
   return bad.join('\n');
 }
 
+// ---- grid: the app's first-iteration layout. A clean primary block, guillotine splits around it, ragged edge.
+
+function panePool() {
+  const ok = (id) => id !== 'photo' && !state.broken[id];
+  const short = state.shortlist.filter(ok);
+  return short.length ? short : PANES.map((p) => p.id).filter(ok);
+}
+
+function rollCell(c, rng, g) {
+  const pool = panePool();
+  c.pane = c.primary || rng() >= g.effects ? 'photo' : pool[Math.floor(rng() * pool.length)];
+  c.label = SYL[Math.floor(rng() * SYL.length)];
+  c.num = 1 + Math.floor(rng() * 9);
+  return c;
+}
+
+function carveFrame(P, rng) {
+  const e = 1e-6, out = [];
+  const strips = [[0, 0, P.x, 1], [P.x + P.w, 0, 1 - P.x - P.w, 1], [P.x, 0, P.w, P.y], [P.x, P.y + P.h, P.w, 1 - P.y - P.h]];
+  const rows = [[0, 0, 1, P.y], [0, P.y + P.h, 1, 1 - P.y - P.h], [0, P.y, P.x, P.h], [P.x + P.w, P.y, 1 - P.x - P.w, P.h]];
+  for (const r of rng() < 0.5 ? strips : rows) if (r[2] > e && r[3] > e) out.push(r);
+  return out;
+}
+
+function gridCells(g, W, H) {
+  const rng = keyed(g.seed, 0x9e3779b9);
+  const F = { w: GRID_FRAME.w * W, h: GRID_FRAME.h * H };
+  const depth = 3 + g.density, min = 0.14 / (1 + 0.3 * g.density) * Math.min(F.w, F.h);
+  const q = (v) => Math.round(v * 48) / 48;
+  const side = 0.46 * Math.min(F.w, F.h);
+  const pw = q(Math.min(0.6, side * (0.9 + rng() * 0.25) / F.w));
+  const ph = q(Math.min(0.6, side * (0.95 + rng() * 0.3) / F.h));
+  const P = { x: q(clamp(0.5 - pw / 2 + (rng() - 0.5) * 0.16, 1 / 24, 1 - 1 / 24 - pw)), y: q(0.1 + rng() * 0.14), w: pw, h: ph };
+  const cells = [];
+  function split(x, y, w, h, d) {
+    const pxw = w * F.w, pxh = h * F.h;
+    const stop = d >= depth || (d > 3 && rng() < 0.05 + d * 0.02);
+    const vertical = pxw > pxh ? rng() < 0.78 : rng() < 0.22;
+    const sliver = rng() < 0.16;
+    const r = sliver ? (rng() < 0.5 ? 0.05 + rng() * 0.07 : 0.88 + rng() * 0.07) : 0.25 + rng() * 0.5;
+    const len = vertical ? pxw : pxh;
+    if (stop || len * Math.min(r, 1 - r) < (sliver ? min * 0.3 : min)) { cells.push({ x, y, w, h }); return; }
+    if (vertical) { split(x, y, w * r, h, d + 1); split(x + w * r, y, w - w * r, h, d + 1); }
+    else { split(x, y, w, h * r, d + 1); split(x, y + h * r, w, h - h * r, d + 1); }
+  }
+  for (const [x, y, w, h] of carveFrame(P, rng)) split(x, y, w, h, 1);
+  cells.push({ ...P, primary: true });
+  const kept = cells.filter((c) => {
+    if (c.primary) return true;
+    const edge = c.x < 1e-6 || c.y < 1e-6 || c.x + c.w > 1 - 1e-6 || c.y + c.h > 1 - 1e-6;
+    return !edge || rng() >= g.ragged * (c.w * c.h > 0.05 ? 0.25 : 1);
+  });
+  return kept.map((c, i) => rollCell({
+    id: i + 1, primary: !!c.primary,
+    x: GRID_FRAME.x + c.x * GRID_FRAME.w, y: GRID_FRAME.y + c.y * GRID_FRAME.h, w: c.w * GRID_FRAME.w, h: c.h * GRID_FRAME.h,
+  }, rng, g));
+}
+
+function makeGrid() {
+  const G = state.single || { w: 1080, h: 1350 };
+  state.cells = gridCells(state.grid, G.w, G.h);
+  state.nextId = state.cells.length + 1;
+  state.outside = 'paper';
+  state.gridLive = true;
+  state.beat = null;
+  selectCell(null);
+}
+
+function animateTo(beat) {
+  for (const c of state.cells) {
+    if (c.primary || c.id === state.sel) continue;
+    const r = keyed(state.grid.seed, beat, c.id);
+    if (r() < CHANGE_RATE) rollCell(c, r, state.grid);
+  }
+  cellsChanged();
+}
+
 // ---- layout
 
 const view = $('view');
@@ -348,15 +506,13 @@ function singleGeom() {
   const cover = { sc: Math.max(cw / s.w, ch / s.h), ox: 0, oy: 0 };
   cover.ox = (cw - s.w * cover.sc) / 2;
   cover.oy = (ch - s.h * cover.sc) / 2;
-  const c = state.cell;
-  return {
-    w: cw, h: ch, src: s, cover, k: Math.min(cw, ch) / 1080,
-    rect: { x: c.x * cw, y: c.y * ch, w: c.w * cw, h: c.h * ch },
-  };
+  return { w: cw, h: ch, src: s, cover, k: Math.min(cw, ch) / 1080 };
 }
 
+const cellRect = (c, G = state.single) => ({ x: c.x * G.w, y: c.y * G.h, w: c.w * G.w, h: c.h * G.h });
+
 function compareGeom(G) {
-  const R = G.rect;
+  const R = cellRect(selectedCell() || state.cells[0] || DEFAULT_CELL, G);
   let crop = { x: R.x - R.w * 0.3, y: R.y - R.h * 0.3, w: R.w * 1.6, h: R.h * 1.6 };
   const asp = crop.w / crop.h;
   if (asp < 0.7) { const nw = crop.h * 0.7; crop.x -= (nw - crop.w) / 2; crop.w = nw; }
@@ -423,39 +579,51 @@ function drawPane(p, tile, cover, cell, k) {
 }
 
 const linear = (v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+// Ink must reach 5:1 (4.5 plus headroom for video moving between measurements) against the light end (black) or the dark end (white) of what sits under the label; otherwise it gets a paper chip.
 function inkAt(x, y, w, h) {
   const gl = drawingContext, d = pixelDensity();
   const W = Math.max(1, Math.round(w * d)), H = Math.max(1, Math.round(h * d));
   const buf = new Uint8Array(W * H * 4);
   gl.readPixels(Math.round(x * d), Math.round((height - y - h) * d), W, H, gl.RGBA, gl.UNSIGNED_BYTE, buf);
-  let L = 0, L2 = 0;
-  const n = buf.length / 4;
-  for (let i = 0; i < buf.length; i += 4) {
-    const l = 0.2126 * linear(buf[i] / 255) + 0.7152 * linear(buf[i + 1] / 255) + 0.0722 * linear(buf[i + 2] / 255);
-    L += l; L2 += l * l;
-  }
-  L /= n;
-  const busy = Math.sqrt(Math.max(0, L2 / n - L * L)) > 0.22;
-  return { ink: (L + 0.05) / 0.05 >= 1.05 / (L + 0.05) ? '#000' : '#fff', busy };
+  const ls = new Float32Array(W * H);
+  for (let i = 0, j = 0; i < buf.length; i += 4, j++) ls[j] = 0.2126 * linear(buf[i] / 255) + 0.7152 * linear(buf[i + 1] / 255) + 0.0722 * linear(buf[i + 2] / 255);
+  ls.sort();
+  const lo = ls[Math.floor(ls.length * 0.1)], hi = ls[Math.floor(ls.length * 0.9)];
+  if ((lo + 0.05) / 0.05 >= 5) return { ink: '#000', chip: false };
+  if (1.05 / (hi + 0.05) >= 5) return { ink: '#fff', chip: false };
+  return { ink: '#111', chip: true };
 }
 
-function drawLabel(p, R, scale) {
+// Reading pixels stalls the GPU, so each label's ink is re-measured a few times a second, not every frame.
+function inkCached(key, x, y, w, h) {
+  const hit = state.inks.get(key);
+  const sig = [x, y, w, h].map(Math.round).join(',');
+  if (hit && hit.sig === sig && frameCount - hit.frame < 12) return hit.v;
+  const v = inkAt(x, y, w, h);
+  state.inks.set(key, { sig, frame: frameCount, v });
+  return v;
+}
+
+function drawLabel(key, syl, num, R, scale) {
   const big = Math.max(11, Math.round(15 * scale)), small = Math.max(11, Math.round(12 * scale));
   const inset = Math.max(4, 6 * scale);
-  const lab = labelOf(p);
+  if (R.w < inset + big * 1.4 || R.h < inset + big + small + 2) return;
   const bw = Math.min(R.w - 2, inset + big * 2.4), bh = Math.min(R.h - 2, inset + big + small + 4);
-  const under = inkAt(R.x + 1, R.y + 1, bw, bh);
+  const under = inkCached(key + '|' + syl + num, R.x + 1, R.y + 1, bw, bh);
+  octx.save();
+  octx.beginPath(); octx.rect(R.x, R.y, R.w, R.h); octx.clip();
   octx.fillStyle = under.ink;
-  if (under.busy) {
+  if (under.chip) {
     octx.fillStyle = PAPER;
     octx.fillRect(R.x + 1, R.y + 1, bw + inset * 0.5, bh + inset * 0.5);
     octx.fillStyle = '#111';
   }
   octx.textBaseline = 'top';
   octx.font = `700 ${big}px ${MONO}`;
-  octx.fillText(lab.syl, R.x + inset, R.y + inset);
+  octx.fillText(syl, R.x + inset, R.y + inset);
   octx.font = `400 ${small}px ${MONO}`;
-  octx.fillText(lab.num, R.x + inset, R.y + inset + big + 2);
+  octx.fillText(num, R.x + inset, R.y + inset + big + 2);
+  octx.restore();
 }
 
 function hairline(R) {
@@ -464,17 +632,37 @@ function hairline(R) {
   octx.strokeRect(Math.round(R.x) + 0.5, Math.round(R.y) + 0.5, Math.round(R.w), Math.round(R.h));
 }
 
-function drawSingle() {
+function drawCells() {
   const G = state.single;
-  const p = byId[state.id];
-  drawPane(p, { x: 0, y: 0, w: width, h: height }, G.cover, G.rect, G.k);
-  hairline(G.rect);
-  drawLabel(p, G.rect, Math.max(0.85, G.k * 1.2));
-  const R = G.rect, hs = 12;
-  octx.fillStyle = '#111';
-  octx.fillRect(R.x + R.w - hs, R.y + R.h - hs, hs, hs);
-  octx.strokeStyle = '#fbfbfb';
-  octx.strokeRect(R.x + R.w - hs + 0.5, R.y + R.h - hs + 0.5, hs - 1, hs - 1);
+  const full = { x: 0, y: 0, w: width, h: height };
+  if (state.outside === 'photo') drawPane(byId.photo, full, G.cover, full, G.k);
+  const rects = state.cells.map((c) => [c, cellRect(c)]);
+  for (const [c, R] of rects) drawPane(paneOf(c), R, G.cover, R, G.k);
+  const scale = Math.max(0.8, G.k * 1.2);
+  for (const [c, R] of rects) {
+    hairline(R);
+    drawLabel('c' + c.id, c.label, c.num + byId[c.pane].mark, R, scale);
+  }
+  const sel = selectedCell();
+  if (sel) {
+    const R = cellRect(sel), hs = 12;
+    octx.lineWidth = 2; octx.strokeStyle = '#111';
+    octx.strokeRect(Math.round(R.x) + 1, Math.round(R.y) + 1, Math.round(R.w) - 2, Math.round(R.h) - 2);
+    octx.lineWidth = 1; octx.strokeStyle = PAPER;
+    octx.strokeRect(Math.round(R.x) + 2.5, Math.round(R.y) + 2.5, Math.round(R.w) - 5, Math.round(R.h) - 5);
+    octx.fillStyle = '#111';
+    octx.fillRect(R.x + R.w - hs, R.y + R.h - hs, hs, hs);
+    octx.strokeStyle = PAPER;
+    octx.strokeRect(R.x + R.w - hs + 0.5, R.y + R.h - hs + 0.5, hs - 1, hs - 1);
+  }
+  if (state.draft) {
+    const R = state.draft;
+    octx.lineWidth = 3; octx.strokeStyle = PAPER; octx.setLineDash([]);
+    octx.strokeRect(R.x + 0.5, R.y + 0.5, R.w, R.h);
+    octx.lineWidth = 1; octx.strokeStyle = '#111'; octx.setLineDash([4, 3]);
+    octx.strokeRect(R.x + 0.5, R.y + 0.5, R.w, R.h);
+    octx.setLineDash([]);
+  }
 }
 
 function drawCompare() {
@@ -485,10 +673,11 @@ function drawCompare() {
   for (const t of state.tiles) {
     const clip = { x: Math.max(t.rect.x, t.x), y: Math.max(t.rect.y, t.y) };
     const R = { x: clip.x, y: clip.y, w: Math.min(t.rect.x + t.rect.w, t.x + t.w) - clip.x, h: Math.min(t.rect.y + t.rect.h, t.y + t.h) - clip.y };
+    const lab = labelOf(t.pane);
     octx.save();
     octx.beginPath(); octx.rect(t.x, t.y, t.w, t.h); octx.clip();
     hairline(R);
-    drawLabel(t.pane, R, 0.75);
+    drawLabel('t' + t.pane.id, lab.syl, lab.num + t.pane.mark, R, 0.75);
     octx.restore();
     const on = t.pane.id === state.id;
     if (on) { octx.strokeStyle = '#111'; octx.lineWidth = 2; octx.strokeRect(t.x + 1, t.y + 1, t.w - 2, t.h - 2); }
@@ -518,11 +707,14 @@ function setup() {
   }
   document.body.dataset.compiled = String(ok);
   DEMO = makeDemo();
+  if (state.broken[state.id]) state.id = PANES.find((p) => !state.broken[p.id]).id;
   buildCatalogue();
+  buildGridRows();
   showDetail();
   renderShortlist();
+  cellsChanged();
+  setAnimate(state.grid.animate);
   setCompare(state.compare);
-  if (state.broken[state.id]) state.id = PANES.find((p) => !state.broken[p.id]).id;
   const src = qs.get('src');
   if (src) openPath(src, src.split('/').slice(-2).join('/'), /\.(mp4|mov|webm|m4v)$/i.test(src));
   else setSource(DEMO, 'Demo');
@@ -534,7 +726,12 @@ function draw() {
   octx.setTransform(d, 0, 0, d, 0, 0);
   octx.clearRect(0, 0, width, height);
   if (!state.source || !sizeOf(state.source) || !state.single) return;
-  if (state.compare) drawCompare(); else if (!state.broken[state.id]) drawSingle();
+  if (state.grid.animate && !state.compare && !drag) {
+    const b = Math.floor(now() / BEAT_SECONDS);
+    if (state.beat != null && b !== state.beat) animateTo(b);
+    state.beat = b;
+  }
+  if (state.compare) drawCompare(); else drawCells();
   document.body.dataset.frames = String((Number(document.body.dataset.frames) || 0) + 1);
 }
 
@@ -547,24 +744,37 @@ const local = (e) => {
   const b = overlay.getBoundingClientRect();
   return { x: e.clientX - b.left, y: e.clientY - b.top };
 };
-function hitSingle(m) {
-  const R = state.single.rect;
-  if (Math.abs(m.x - (R.x + R.w)) < 16 && Math.abs(m.y - (R.y + R.h)) < 16) return 'resize';
-  if (m.x >= R.x && m.y >= R.y && m.x <= R.x + R.w && m.y <= R.y + R.h) return 'move';
+function hitCells(m) {
+  const sel = selectedCell();
+  if (sel) {
+    const R = cellRect(sel);
+    if (Math.abs(m.x - (R.x + R.w)) < 16 && Math.abs(m.y - (R.y + R.h)) < 16) return { kind: 'resize', cell: sel };
+  }
+  for (let i = state.cells.length - 1; i >= 0; i--) {
+    const R = cellRect(state.cells[i]);
+    if (m.x >= R.x && m.y >= R.y && m.x <= R.x + R.w && m.y <= R.y + R.h) return { kind: 'move', cell: state.cells[i] };
+  }
   return null;
 }
 const tileAt = (m) => state.tiles.find((t) => m.x >= t.x && m.x <= t.x + t.w && m.y >= t.y && m.y <= t.y + t.h + state.strip);
+const inside = (m) => ({ x: clamp(m.x, 0, state.single.w), y: clamp(m.y, 0, state.single.h) });
+const spanRect = (a, b) => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) });
 
 overlay.addEventListener('pointerdown', (e) => {
+  if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
   const m = local(e);
   if (state.compare) {
     const t = tileAt(m);
     if (t && !state.broken[t.pane.id]) { choosePane(t.pane.id); setCompare(false); }
     return;
   }
-  const kind = hitSingle(m);
-  if (!kind) return;
-  drag = { kind, m, cell: { ...state.cell } };
+  const hit = hitCells(m);
+  if (hit) {
+    if (hit.cell.id !== state.sel) selectCell(hit.cell.id);
+    drag = { kind: hit.kind, m, cell: { ...hit.cell }, moved: false };
+  } else {
+    drag = { kind: 'draw', m: inside(m) };
+  }
   overlay.setPointerCapture(e.pointerId);
   e.preventDefault();
 });
@@ -572,26 +782,81 @@ overlay.addEventListener('pointermove', (e) => {
   const m = local(e);
   if (state.compare) { overlay.style.cursor = tileAt(m) ? 'pointer' : 'default'; return; }
   if (!drag) {
-    const k = hitSingle(m);
-    overlay.style.cursor = k === 'resize' ? 'nwse-resize' : k === 'move' ? 'move' : 'default';
+    const hit = hitCells(m);
+    overlay.style.cursor = !hit ? 'crosshair' : hit.kind === 'resize' ? 'nwse-resize' : 'move';
     return;
   }
-  const G = state.single, c = drag.cell;
+  const G = state.single;
+  if (drag.kind === 'draw') { state.draft = spanRect(drag.m, inside(m)); return; }
+  const c = selectedCell(), c0 = drag.cell;
+  if (!c) return;
   const dx = (m.x - drag.m.x) / G.w, dy = (m.y - drag.m.y) / G.h;
-  const minW = 40 / G.w, minH = 40 / G.h;
-  const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+  if (dx || dy) drag.moved = true;
   if (drag.kind === 'move') {
-    state.cell.x = clamp(c.x + dx, 0, 1 - c.w);
-    state.cell.y = clamp(c.y + dy, 0, 1 - c.h);
+    c.x = clamp(c0.x + dx, 0, 1 - c0.w);
+    c.y = clamp(c0.y + dy, 0, 1 - c0.h);
   } else {
-    state.cell.w = clamp(c.w + dx, minW, 1 - c.x);
-    state.cell.h = clamp(c.h + dy, minH, 1 - c.y);
+    c.w = clamp(c0.w + dx, MIN_CELL_PX / G.w, 1 - c0.x);
+    c.h = clamp(c0.h + dy, MIN_CELL_PX / G.h, 1 - c0.y);
   }
-  layout();
 });
-const endDrag = () => { drag = null; };
+const endDrag = () => {
+  if (!drag) return;
+  const d = drag;
+  drag = null;
+  if (d.kind === 'draw') {
+    const R = state.draft;
+    state.draft = null;
+    if (R && R.w >= MIN_CELL_PX && R.h >= MIN_CELL_PX) addCell(R); else selectCell(null);
+  } else if (d.moved) {
+    state.gridLive = false;
+    cellsChanged();
+  }
+};
 overlay.addEventListener('pointerup', endDrag);
 overlay.addEventListener('pointercancel', endDrag);
+
+window.addEventListener('keydown', (e) => {
+  const t = e.target;
+  if (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type !== 'range')) return;
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selectedCell()) { e.preventDefault(); removeCell(); }
+  else if (e.key === 'Escape' && state.sel != null) selectCell(null);
+});
+
+function addCell(R) {
+  const G = state.single, id = state.nextId++;
+  const r = keyed(state.grid.seed, id, 0x51ab);
+  state.cells.push({
+    id, x: R.x / G.w, y: R.y / G.h, w: R.w / G.w, h: R.h / G.h, pane: state.id,
+    label: SYL[Math.floor(r() * SYL.length)], num: 1 + Math.floor(r() * 9), primary: false,
+  });
+  state.gridLive = false;
+  selectCell(id);
+}
+
+function removeCell() {
+  state.cells = state.cells.filter((c) => c.id !== state.sel);
+  state.gridLive = false;
+  selectCell(null);
+}
+
+function selectCell(id) {
+  state.sel = id;
+  const c = selectedCell();
+  if (c) {
+    state.id = c.pane;
+    state.cells = [...state.cells.filter((x) => x !== c), c];
+  }
+  markCatalogue();
+  showDetail();
+  cellsChanged();
+}
+
+function cellsChanged() {
+  persist();
+  renderLayout();
+  renderCellNote();
+}
 
 function setCompare(on) {
   state.compare = on;
@@ -601,11 +866,24 @@ function setCompare(on) {
   layout();
 }
 
+function setAnimate(on) {
+  state.grid.animate = on;
+  state.beat = null;
+  $('animate').setAttribute('aria-pressed', String(on));
+  persist();
+}
+
 function choosePane(id) {
   state.id = id;
-  persist();
-  for (const b of document.querySelectorAll('.pane')) b.classList.toggle('on', b.dataset.id === id);
+  const c = selectedCell();
+  if (c && c.pane !== id) { c.pane = id; state.gridLive = false; }
+  markCatalogue();
   showDetail();
+  cellsChanged();
+}
+
+function markCatalogue() {
+  for (const b of document.querySelectorAll('.pane')) b.classList.toggle('on', b.dataset.id === state.id);
 }
 
 function buildCatalogue() {
@@ -638,9 +916,61 @@ function markShortlist() {
 
 const fmt = (v, step) => (step >= 1 ? String(Math.round(v)) : v.toFixed(step >= 0.1 ? 1 : 2));
 
+const GRID_ROWS = [
+  { key: 'density', label: 'Density', min: 1, max: 10, step: 1 },
+  { key: 'ragged', label: 'Ragged', min: 0, max: 0.8, step: 0.01 },
+  { key: 'effects', label: 'Effects', min: 0, max: 1, step: 0.01 },
+];
+
+function buildGridRows() {
+  const box = $('gridRows');
+  const regrow = () => { persist(); if (state.gridLive) makeGrid(); };
+  const seed = document.createElement('div');
+  seed.className = 'row seed';
+  seed.innerHTML = '<label for="grid-seed">Seed</label><input id="grid-seed" type="number" min="1" step="1"><button class="btn" id="reroll">Reroll</button>';
+  const si = seed.querySelector('input');
+  si.value = state.grid.seed;
+  si.addEventListener('input', () => {
+    const v = Math.floor(Number(si.value));
+    if (Number.isFinite(v)) { state.grid.seed = v; regrow(); }
+  });
+  seed.querySelector('button').addEventListener('click', () => {
+    state.grid.seed = 1 + Math.floor(Math.random() * 99999);
+    si.value = state.grid.seed;
+    persist();
+    makeGrid();
+  });
+  box.append(seed);
+  for (const s of GRID_ROWS) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `<label for="grid-${s.key}">${s.label}</label><input id="grid-${s.key}" type="range" min="${s.min}" max="${s.max}" step="${s.step}"><output></output>`;
+    const inp = row.querySelector('input'), out = row.querySelector('output');
+    inp.value = state.grid[s.key];
+    out.textContent = fmt(state.grid[s.key], s.step);
+    inp.addEventListener('input', () => {
+      state.grid[s.key] = Number(inp.value);
+      out.textContent = fmt(state.grid[s.key], s.step);
+      regrow();
+    });
+    box.append(row);
+  }
+}
+
+function renderCellNote() {
+  const c = selectedCell();
+  const p = byId[state.id];
+  $('cellNote').textContent = c
+    ? `Selected ${c.label}${c.num}${byId[c.pane].mark}, ${byId[c.pane].name}${c.primary ? ', the primary block' : ''}. Pick a pane to change it. Drag it to move, drag the corner to resize, Delete removes it.`
+    : `${state.cells.length} cell${state.cells.length === 1 ? '' : 's'}. Drag on an empty part of the picture to draw one. It gets ${p.name}. Grid builds the app's layout; Animate re-rolls it every beat.`;
+  $('removeCell').disabled = !c;
+  $('outside').setAttribute('aria-pressed', String(state.outside === 'paper'));
+}
+
 function showDetail() {
   const p = byId[state.id];
-  const lab = labelOf(p);
+  const sel = selectedCell();
+  const lab = sel && sel.pane === p.id ? { syl: sel.label, num: sel.num } : labelOf(p);
   const el = $('detail');
   el.innerHTML = '';
   const add = (tag, cls, text) => {
@@ -650,12 +980,12 @@ function showDetail() {
     return n;
   };
   el.append(add('h2', null, 'PANE'));
-  el.append(add('div', 'title', `${p.mark} ${p.name}`));
-  el.append(add('div', 'meta', `${p.family} · label ${lab.syl}${lab.num}`));
+  el.append(add('div', 'title', `${p.mark} ${p.name}`.trim()));
+  el.append(add('div', 'meta', `${p.family} · label ${lab.syl}${lab.num}${p.mark}`));
   const dl = add('dl', 'text');
   for (const [t, d] of [['What you see', p.what], ['How it works', p.how], ['Next to the photo', p.merge]]) dl.append(add('dt', null, t), add('dd', null, d));
   el.append(dl);
-  el.append(add('h2', null, 'SETTINGS'));
+  if (p.params.length) el.append(add('h2', null, 'SETTINGS'));
   for (const prm of p.params) {
     const row = add('div', 'row');
     const id = `prm-${prm.key}`;
@@ -668,6 +998,7 @@ function showDetail() {
       out.textContent = fmt(Number(inp.value), prm.step);
       persist();
       renderShortlist();
+      renderLayout();
     });
     row.append(lab2, inp, out);
     el.append(row);
@@ -680,31 +1011,52 @@ function showDetail() {
     state.shortlist = on ? state.shortlist.filter((x) => x !== p.id) : [...state.shortlist, p.id];
     persist(); markShortlist(); renderShortlist(); showDetail();
   });
-  const reset = add('button', 'btn', 'Reset');
-  reset.addEventListener('click', () => {
-    for (const prm of p.params) state.values[p.id][prm.key] = prm.value;
-    persist(); renderShortlist(); showDetail();
-  });
-  btns.append(sl, reset);
+  btns.append(sl);
+  if (p.params.length) {
+    const reset = add('button', 'btn', 'Reset');
+    reset.addEventListener('click', () => {
+      for (const prm of p.params) state.values[p.id][prm.key] = prm.value;
+      persist(); renderShortlist(); renderLayout(); showDetail();
+    });
+    btns.append(reset);
+  }
   el.append(btns);
 }
 
 function renderShortlist() {
   const list = state.shortlist.map((id) => ({ id, name: byId[id].name, mark: byId[id].mark, params: state.values[id] }));
   $('shortCount').textContent = list.length
-    ? `${list.length} pane${list.length > 1 ? 's' : ''}. Copy this and paste it back to Claude.`
+    ? `${list.length} pane${list.length > 1 ? 's' : ''}. Copy this and paste it back to Claude. Grid picks its panes from this list.`
     : 'Nothing yet. Open a pane and press Add to shortlist.';
   $('shortJson').value = JSON.stringify(list, null, 1);
 }
 
-$('copy').addEventListener('click', async () => {
-  const ta = $('shortJson');
+function renderLayout() {
+  const r4 = (v) => Math.round(v * 10000) / 10000;
+  const used = [...new Set(state.cells.map((c) => c.pane))].filter((id) => byId[id].params.length);
+  const out = {
+    outside: state.outside,
+    cells: state.cells.map((c) => ({ id: c.id, x: r4(c.x), y: r4(c.y), w: r4(c.w), h: r4(c.h), pane: c.pane, label: c.label, num: c.num, primary: c.primary })),
+    params: Object.fromEntries(used.map((id) => [id, state.values[id]])),
+  };
+  $('layoutJson').value = JSON.stringify(out, null, 1);
+}
+
+async function copyFrom(ta, btn) {
   try { await navigator.clipboard.writeText(ta.value); }
-  catch (e) { ta.choosePane(); document.execCommand('copy'); }
-  $('copy').textContent = 'Copied';
-  setTimeout(() => { $('copy').textContent = 'Copy'; }, 1200);
-});
+  catch (e) { ta.select(); document.execCommand('copy'); }
+  btn.textContent = 'Copied';
+  setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+}
+
+$('copy').addEventListener('click', () => copyFrom($('shortJson'), $('copy')));
+$('copyLayout').addEventListener('click', () => copyFrom($('layoutJson'), $('copyLayout')));
 $('clearShort').addEventListener('click', () => { state.shortlist = []; persist(); markShortlist(); renderShortlist(); showDetail(); });
+$('grid').addEventListener('click', () => { if (state.compare) setCompare(false); makeGrid(); });
+$('animate').addEventListener('click', () => setAnimate(!state.grid.animate));
+$('clearCells').addEventListener('click', () => { state.cells = []; state.gridLive = false; selectCell(null); });
+$('removeCell').addEventListener('click', removeCell);
+$('outside').addEventListener('click', () => { state.outside = state.outside === 'paper' ? 'photo' : 'paper'; cellsChanged(); });
 $('compare').addEventListener('click', () => setCompare(!state.compare));
 $('pause').addEventListener('click', () => {
   state.pausedAt = state.pausedAt == null ? millis() / 1000 : null;
