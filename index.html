@@ -251,9 +251,18 @@ function pickMode(rng, effectRate, aspect) {
   return 'photo';
 }
 
+// Panes belong where the picture is: cells whose centre sits in the focus zone around the primary block
+// take panes far more often than cells out over the background, where a pane shows almost nothing.
+let focus = { x: 0.2, y: 0.2, w: 0.6, h: 0.6 };
+const inFocus = (c) => {
+  const cx = c.x + c.w / 2, cy = c.y + c.h / 2;
+  return cx >= focus.x && cx <= focus.x + focus.w && cy >= focus.y && cy <= focus.y + focus.h;
+};
+
 function roll(c, rng, p, F, born) {
   const syl = p.syllables.length ? p.syllables : ['XX'];
-  const mode = c.primary ? 'photo' : pickMode(rng, p.stretchRate, (c.w * F.w) / (c.h * F.h));
+  const rate = Math.min(0.95, p.stretchRate * (inFocus(c) ? 1.7 : 0.35));
+  const mode = c.primary ? 'photo' : pickMode(rng, rate, (c.w * F.w) / (c.h * F.h));
   c.prev = c.mode || mode;
   c.mode = mode;
   c.label = syl[Math.floor(rng() * syl.length)];
@@ -390,6 +399,8 @@ function baseFor(p, P) {
   const key = JSON.stringify([p.seed, p.width, p.height, p.frame, p.depth, p.minCell, p.dropRate, p.stretchRate, p.syllables, P]);
   if (key !== baseKey) {
     baseKey = key;
+    const m = P ? Math.max(P.w, P.h) * 0.6 : 0;
+    focus = P ? { x: P.x - m, y: P.y - m, w: P.w + 2 * m, h: P.h + 2 * m } : { x: 0.2, y: 0.2, w: 0.6, h: 0.6 };
     baseCells = layout(p, keyed(p.seed, 0x9e3779b9), P);
   }
   return baseCells;
@@ -455,7 +466,7 @@ function cameraOf(src, F, box) {
 function primaryIn(cam, F, core) {
   const q = (v) => Math.round(clamp(v, 0, 1) * 48) / 48;
   const fw = (core.w * cam.sw * cam.sc) / F.w, fh = (core.h * cam.sh * cam.sc) / F.h;
-  const k = Math.min(1, 0.7 / fw, 0.7 / fh, Math.sqrt(0.4 / (fw * fh)));
+  const k = Math.min(1, 0.5 / fw, 0.5 / fh, Math.sqrt(0.18 / (fw * fh)));
   core = { x: core.x + (core.w * (1 - k)) / 2, y: core.y, w: core.w * k, h: core.h * k };
   const x0 = q((cam.ox + core.x * cam.sw * cam.sc - F.x) / F.w), x1 = q((cam.ox + (core.x + core.w) * cam.sw * cam.sc - F.x) / F.w);
   const y0 = q((cam.oy + core.y * cam.sh * cam.sc - F.y) / F.h), y1 = q((cam.oy + (core.y + core.h) * cam.sh * cam.sc - F.y) / F.h);
