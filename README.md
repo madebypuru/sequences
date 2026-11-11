@@ -25,7 +25,7 @@ The first time, the page downloads two open models from the web (Grounding DINO 
 
 ## Open it
 
-Open `index.html` in a desktop browser (Chrome, Safari or Firefox). It runs straight from the file. Nothing to install. A built-in demo source plays until you add your own.
+Open `index.html` in a desktop browser (Chrome, Safari or Firefox), or use the live site at https://madebypuru.github.io/sequences/. It runs straight from the file. Nothing to install. Until you add your own source it plays a demo: NASA's black hole accretion disk visualization (credit: NASA's Goddard Space Flight Center / Jeremy Schnittman, [svs.gsfc.nasa.gov/13326](https://svs.gsfc.nasa.gov/13326)), embedded in `demo-video.js`.
 
 ## Add sources
 

@@ -171,6 +171,7 @@
 
 <script src="shader.js"></script>
 <script src="subject.js"></script>
+<script src="demo-video.js"></script>
 <script>
 'use strict';
 
@@ -630,7 +631,22 @@ function makeDemo() {
   return cv;
 }
 
-const DEMO = makeDemo();
+// The demo is NASA's black hole visualization (demo-video.js). Until it decodes, or if it cannot, the drawn shapes stand in.
+let DEMO = makeDemo();
+function loadDemoVideo() {
+  if (!window.DEMO_VIDEO) return;
+  const bin = atob(DEMO_VIDEO.slice(DEMO_VIDEO.indexOf(',') + 1));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const v = document.createElement('video');
+  Object.assign(v, { muted: true, defaultMuted: true, loop: true, playsInline: true, preload: 'auto' });
+  v.src = URL.createObjectURL(new Blob([bytes], { type: 'video/mp4' }));
+  v.addEventListener('loadeddata', () => {
+    DEMO = v;
+    watchSubject(v, 'video', 'classic');
+    state.dirty = true;
+  }, { once: true });
+}
 Subject.onProgress((e) => {
   if (e.total && e.progress < 1) setStatus(`Loading subject model ${Math.round(e.progress * 100)}%`);
   else if (e.status === 'ready' || e.progress === 1) setStatus('Subject model ready');
@@ -829,6 +845,10 @@ addEventListener('drop', (e) => {
 });
 
 function syncVideos(active) {
+  if (DEMO instanceof HTMLVideoElement) {
+    if (DEMO === active && DEMO.paused && state.playing) DEMO.play().catch(() => {});
+    else if ((DEMO !== active || !state.playing) && !DEMO.paused) DEMO.pause();
+  }
   for (const s of state.sources) {
     if (s.kind !== 'video') continue;
     if (s.el === active && s.el.paused && state.playing) s.el.play().catch(() => {});
@@ -995,6 +1015,7 @@ $('frames').addEventListener('click', () => exportFrames().catch((err) => {
 window.Seq = { render, layout, cellsAt, params, MODES, baseFor, keyed, demo: DEMO, addFiles, state, watchSubject, trackSubject, subjectFor, cameraOf, records: RECORDS };
 
 watchSubject(DEMO, 'image', 'classic');
+loadDemoVideo();
 resize();
 syncScrub();
 renderSourceList();
