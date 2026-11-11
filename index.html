@@ -255,18 +255,58 @@ function pickMode(rng, effectRate, aspect) {
   return 'photo';
 }
 
-// Panes belong where the picture is: cells whose centre sits in the focus zone around the primary block
-// take panes far more often than cells out over the background, where a pane shows almost nothing.
+// Panes belong where the picture is. A pane over flat ground (black space, blank sky, soft bokeh)
+// shows almost nothing, so cells take panes by how much texture sits under them, and cells near
+// the primary block more often still.
 let focus = { x: 0.2, y: 0.2, w: 0.6, h: 0.6 };
+let detail = null; // { gw, gh, v: Float32Array of local contrast per grid cell over the frame }
 const inFocus = (c) => {
   const cx = c.x + c.w / 2, cy = c.y + c.h / 2;
   return cx >= focus.x && cx <= focus.x + focus.w && cy >= focus.y && cy <= focus.y + focus.h;
 };
+function textureOf(c) {
+  if (!detail) return 1;
+  const { gw, gh, v } = detail;
+  const x0 = Math.floor(c.x * gw), x1 = Math.max(x0 + 1, Math.ceil((c.x + c.w) * gw));
+  const y0 = Math.floor(c.y * gh), y1 = Math.max(y0 + 1, Math.ceil((c.y + c.h) * gh));
+  let t = 0, n = 0;
+  for (let y = y0; y < Math.min(y1, gh); y++) for (let x = x0; x < Math.min(x1, gw); x++) { t += v[y * gw + x]; n++; }
+  return n ? t / n : 0;
+}
+function paneRate(c, p) {
+  const tex = clamp(textureOf(c) / 0.06, 0, 1); // ~0.06 mean local contrast reads as full picture
+  return Math.min(0.95, p.stretchRate * (0.08 + tex * (inFocus(c) ? 1.7 : 0.9)));
+}
+
+// Local contrast over the frame as the camera shows it, measured once per layout.
+const detailCanvas = document.createElement('canvas');
+let detailId = 0;
+function detailFor(cam, F) {
+  if (!cam) return null;
+  const gw = 48, gh = Math.max(8, Math.round(48 * F.h / F.w)), W = gw * 4, H = gh * 4;
+  try {
+    detailCanvas.width = W; detailCanvas.height = H;
+    const g = detailCanvas.getContext('2d', { willReadFrequently: true });
+    g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+    g.drawImage(cam.src, (F.x - cam.ox) / cam.sc, (F.y - cam.oy) / cam.sc, F.w / cam.sc, F.h / cam.sc, 0, 0, W, H);
+    const d = g.getImageData(0, 0, W, H).data, v = new Float32Array(gw * gh);
+    for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+      let s = 0, s2 = 0;
+      for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) {
+        const o = ((y * 4 + j) * W + x * 4 + i) * 4;
+        const l = (0.2126 * d[o] + 0.7152 * d[o + 1] + 0.0722 * d[o + 2]) / 255;
+        s += l; s2 += l * l;
+      }
+      const m = s / 16;
+      v[y * gw + x] = Math.sqrt(Math.max(0, s2 / 16 - m * m)) + 0.25 * m * (1 - m); // edges, plus lit midtones
+    }
+    return { gw, gh, v, id: ++detailId };
+  } catch (e) { return null; }
+}
 
 function roll(c, rng, p, F, born) {
   const syl = p.syllables.length ? p.syllables : ['XX'];
-  const rate = Math.min(0.95, p.stretchRate * (inFocus(c) ? 1.7 : 0.35));
-  const mode = c.primary ? 'photo' : pickMode(rng, rate, (c.w * F.w) / (c.h * F.h));
+  const mode = c.primary ? 'photo' : pickMode(rng, paneRate(c, p), (c.w * F.w) / (c.h * F.h));
   c.prev = c.mode || mode;
   c.mode = mode;
   c.label = syl[Math.floor(rng() * syl.length)];
@@ -295,7 +335,10 @@ function layout(p, rng, P) {
   let id = 0;
   function split(x, y, w, h, d) {
     const pw = w * F.w, ph = h * F.h;
-    const stop = d >= p.depth || (d > 3 && rng() < 0.05 + d * 0.02);
+    // Cut finer over the picture, leave flat ground in big quiet blocks.
+    const tex = clamp(textureOf({ x, y, w, h }) / 0.06, 0, 1);
+    const deep = p.depth + (tex > 0.5 ? 1 : 0) - (tex < 0.15 ? 3 : 0);
+    const stop = d >= deep || (d > 3 && rng() < 0.05 + d * 0.02 - tex * 0.04);
     const vertical = pw > ph ? rng() < 0.78 : rng() < 0.22;
     const sliver = rng() < 0.16;
     const r = sliver
@@ -399,10 +442,11 @@ function cellsAt(baseCells, p, beat) {
 }
 
 let baseKey = '', baseCells = null;
-function baseFor(p, P) {
-  const key = JSON.stringify([p.seed, p.width, p.height, p.frame, p.depth, p.minCell, p.dropRate, p.stretchRate, p.syllables, P]);
+function baseFor(p, P, D) {
+  const key = JSON.stringify([p.seed, p.width, p.height, p.frame, p.depth, p.minCell, p.dropRate, p.stretchRate, p.syllables, P, D ? D.id : 0]);
   if (key !== baseKey) {
     baseKey = key;
+    detail = D;
     const m = P ? Math.max(P.w, P.h) * 0.6 : 0;
     focus = P ? { x: P.x - m, y: P.y - m, w: P.w + 2 * m, h: P.h + 2 * m } : { x: 0.2, y: 0.2, w: 0.6, h: 0.6 };
     baseCells = layout(p, keyed(p.seed, 0x9e3779b9), P);
@@ -505,13 +549,26 @@ const GL = (() => {
   return r && { ...r, canvas };
 })();
 
+// One texture map per source and primary block: measured when the anchor lands, then held so the
+// layout (and an export replaying it) stays the same.
+const DETAIL = new WeakMap();
+function detailOf(source, cam, F, P) {
+  if (!source || typeof source !== 'object') return null;
+  const key = JSON.stringify([F, P]);
+  const hit = DETAIL.get(source);
+  if (hit && hit.key === key) return hit.D;
+  const D = detailFor(cam, F);
+  if (D) DETAIL.set(source, { key, D });
+  return D;
+}
+
 function render(ctx, source, p, frameIndex) {
   const F = frameRect(p);
   const subj = subjectFor(source);
   const cv = cameraOf(source, F, subj && subj.box);
   const anchorCam = subj && cameraOf(source, F, subj.anchor.box);
   const P = anchorCam && primaryIn(anchorCam, F, subj.anchor.core);
-  const cells = cellsAt(baseFor(p, P), p, Math.floor(frameIndex / p.beatFrames));
+  const cells = cellsAt(baseFor(p, P, detailOf(source, anchorCam || cv, F, P)), p, Math.floor(frameIndex / p.beatFrames));
   const k = Math.min(p.width, p.height) / 1080;
   const rects = cells.map((c) => cellRect(c, F));
 
