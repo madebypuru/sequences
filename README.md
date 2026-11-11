@@ -49,7 +49,10 @@ Videos play muted and loop.
 
 ## Export
 
-- `PNG` saves the current frame.
+The export buttons stay pinned to the bottom of the panel.
+
+
+- `Image` saves the current frame as a PNG.
 - `Video` records the full length in real time. It saves MP4 where the browser can record it (recent Chrome and Safari) and WebM otherwise. Keep the tab in front while it records. A hidden or busy tab records slower and the clip comes out longer.
 - `Frames` saves every frame as a PNG in a zip. It renders each frame on its own, so the result does not depend on how fast the machine is. Video sources are seeked frame by frame. It loads JSZip from cdnjs the first time, so it needs a network connection.
 
